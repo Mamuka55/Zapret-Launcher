@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="zl-build" content="h1.3.3">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+  <title>Zapret Launcher</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="window">
+
+  <!-- ======= Заголовок (без системной рамки Windows) ======= -->
+  <header id="titlebar">
+    <div class="brand">
+      <span class="brand-logo">ZL</span>
+      <span class="brand-name">Zapret Launcher</span>
+    </div>
+    <div class="win-controls">
+      <button class="wbtn" id="btnSettings" title="Настройки">
+        <svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+      </button>
+      <button class="wbtn" id="btnMin" title="Свернуть">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+      </button>
+      <button class="wbtn wbtn-close" id="btnClose" title="Закрыть">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ======= Основная область ======= -->
+  <main id="main">
+    <div id="bannerUpdate" class="banner hidden">
+      <div class="banner-ic">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/></svg>
+      </div>
+      <div class="banner-text">
+        <b id="updTitle">Доступно обновление</b>
+        <span id="updSub"></span>
+        <div class="progress hidden" id="updProgressWrap"><div id="updProgressBar"></div></div>
+      </div>
+      <button class="btn btn-red" id="btnDoUpdate">Обновить</button>
+    </div>
+
+    <div id="bannerAdmin" class="banner warn hidden">
+      <div class="banner-ic">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+      </div>
+      <div class="banner-text">
+        <b>Приложение запущено без прав администратора</b>
+        <span>Запуск драйвера WinDivert и установка сервиса не будут работать. Собранная версия (exe) запрашивает права один раз при старте.</span>
+      </div>
+    </div>
+    <section id="favSection" class="hidden">
+      <h2 class="sec-title">
+        <svg viewBox="0 0 24 24"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1L12 2z"/></svg>
+        Избранное
+      </h2>
+      <div class="grid" id="favGrid"></div>
+    </section>
+
+    <section id="tgSection" class="hidden">
+      <h2 class="sec-title"><span class="tg-title-icon">TG</span> TG Proxy</h2>
+      <div class="grid">
+        <div class="tile tg-tile" id="tgTile" data-name="tg-ws-proxy" role="button" tabindex="0" title="Запустить / остановить TG Proxy">
+          <div class="t-icon tg-icon">TG</div>
+          <div class="t-label">TG Proxy</div>
+          <div class="t-status"><span class="dot"></span><span id="tgStatus">Остановлен</span></div>
+          <div class="tg-version">Версия: <b id="tgVersion">—</b></div>
+        </div>
+      </div>
+    </section>
+
+
+    <section>
+      <h2 class="sec-title" id="allTitle">
+        <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z"/></svg>
+        Скрипты обхода
+      </h2>
+      <div class="grid" id="batsGrid"></div>
+      <div id="emptyState" class="empty hidden">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+        <p>Батники не найдены.<br>Выберите папку zapret в настройках (шестерёнка) или скачайте свежий релиз с GitHub.</p>
+        <button class="btn btn-red" id="btnEmptyFolder">Выбрать папку</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- ======= Настройки (шестерёнка) ======= -->
+  <div id="settings" class="overlay centered hidden">
+    <div class="panel">
+      <header class="panel-head">
+        <span class="panel-title">
+          <svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+          Настройки
+        </span>
+        <button class="wbtn" id="btnSettingsClose" title="Закрыть">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+
+      <div class="panel-body">
+        <nav class="tabs">
+          <button class="tab active" data-tab="general">Основные</button>
+          <button class="tab" data-tab="updates">Обновления</button>
+          <button class="tab" data-tab="tg">TG Proxy</button>
+          <button class="tab" data-tab="service">Сервис</button>
+          <button class="tab" data-tab="filters">Фильтры</button>
+          <button class="tab" data-tab="fakes">Фэйки</button>
+          <button class="tab" data-tab="diag">Диагностика</button>
+        </nav>
+
+        <div class="pages">
+          <!-- ======== Основные ======== -->
+          <section class="page active" id="page-general">
+            <div class="card">
+              <h3>Папка со скриптами</h3>
+              <div class="row">
+                <input type="text" id="cfgFolder" readonly placeholder="Папка не выбрана">
+                <button class="btn" id="btnChooseFolder">Выбрать…</button>
+                <button class="btn ghost" id="btnOpenFolder" title="Открыть в проводнике">
+                  <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+                </button>
+              </div>
+              <p class="hint">Папка проекта zapret-discord-youtube, где лежат .bat файлы стратегии (service.bat используется приложением внутри).</p>
+            </div>
+
+            <div class="card">
+              <h3>Поведение</h3>
+              <label class="switch">
+                <input type="checkbox" id="togCloseOnExit">
+                <span class="slider"></span>
+                <span class="switch-label">Закрывать запущенные скрипты при выходе из приложения</span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="togStartup">
+                <span class="slider"></span>
+                <span class="switch-label">Запускать приложение вместе с Windows</span>
+              </label>
+            </div>
+            <div class="card">
+              <h3>Внешний вид</h3>
+              <div class="color-row"><label>Цвет акцента<input type="color" id="accentColor"></label><input type="text" id="accentHex" value="#ff2e4c" maxlength="7"></div>
+              <div class="color-row"><label>Цвет фона<input type="color" id="backgroundColor"></label><input type="text" id="backgroundHex" value="#14161b" maxlength="7"></div>
+              <button class="btn ghost" id="btnResetColors">Сбросить цвета</button>
+              <p class="hint">Нажатие на цвет открывает палитру Windows. Можно также указать HEX вручную.</p>
+            </div>
+          </section>
+
+          <!-- ======== Обновления ======== -->
+          <section class="page" id="page-updates">
+            <div class="card">
+              <h3>Источник обновлений (GitHub)</h3>
+              <div class="row">
+                <input type="text" id="cfgRepo" placeholder="owner/repo">
+              </div>
+              <p class="hint">Приложение сравнивает LOCAL_VERSION из service.bat с последним релизом, скачивает архив и заменяет файлы. Новые и удалённые батники автоматически появляются и исчезают на плитках.</p>
+              <label class="switch">
+                <input type="checkbox" id="togAutoCheck">
+                <span class="slider"></span>
+                <span class="switch-label">Проверять обновления при запуске (флаг utils/check_updates.enabled)</span>
+              </label>
+            </div>
+
+            <div class="card">
+              <h3>Версии</h3>
+              <div class="kv"><span>Установлено:</span><b id="verLocal">—</b></div>
+              <div class="kv"><span>Доступно:</span><b id="verRemote">—</b></div>
+              <div class="row top-gap">
+                <button class="btn btn-red" id="btnCheckUpdate">Проверить обновления</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Обновление TG Proxy</h3>
+              <div class="row"><input type="text" id="cfgTgRepo" placeholder="owner/repo"></div>
+              <label class="switch top-gap"><input type="checkbox" id="togTgAutoCheck"><span class="slider"></span><span class="switch-label">Проверять обновления TG Proxy при запуске</span></label>
+              <div class="kv top-gap"><span>Состояние:</span><b id="tgUpdateText">—</b></div>
+              <div class="row top-gap">
+                <button class="btn btn-red" id="btnTgInstall">Установить / обновить TG Proxy</button>
+                <button class="btn" id="btnTgCheck">Проверить обновление</button>
+              </div>
+              <div class="progress hidden" id="tgProgressWrap"><div id="tgProgressBar"></div></div>
+            </div>
+
+            <div class="card">
+              <h3>Обновление Zapret Launcher</h3>
+              <div class="kv"><span>Состояние:</span><b id="appUpdateText">—</b></div>
+              <div class="row top-gap">
+                <button class="btn btn-red" id="btnAppCheck">Проверить приложение</button>
+                <button class="btn" id="btnAppUpdate">Установить обновление</button>
+              </div>
+              <label class="switch top-gap"><input type="checkbox" id="togAppAutoCheck"><span class="slider"></span><span class="switch-label">Проверять обновление приложения при запуске</span></label>
+              <p class="hint">Источник: GitHub Mamuka55/Zapret-Launcher. Для автоматического обновления опубликованные EXE должны находиться в GitHub Release.</p>
+            </div>
+
+            <div class="card">
+              <h3>Hosts-файл</h3>
+              <div class="kv"><span>Состояние:</span><b id="hostsStatus">—</b></div>
+              <div class="row top-gap">
+                <button class="btn" id="btnHostsCheck">Проверить hosts</button>
+                <button class="btn btn-red" id="btnHostsUpdate">Обновить hosts (авто)</button>
+              </div>
+              <p class="hint">Скачивает актуальный hosts из репозитория и применяет его с резервной копией (нужны права администратора).</p>
+            </div>
+
+            <div class="card">
+              <h3>IPSet список</h3>
+              <div class="kv"><span>Источник:</span><b>.service/ipset-service.txt</b></div>
+              <div class="row top-gap">
+                <button class="btn btn-red" id="btnIpsetUpdate">Обновить IPSet список</button>
+              </div>
+              <p class="hint">Обновляет список IPSet из репозитория. Режим списка по-прежнему выбирается во вкладке «Фильтры».</p>
+            </div>
+          </section>
+
+          <!-- ======== TG WS Proxy ======== -->
+          <section class="page" id="page-tg">
+            <div class="card">
+              <h3>TG Proxy</h3>
+              <div class="kv"><span>Состояние:</span><b id="tgSettingsStatus">—</b></div>
+              <div class="kv"><span>Версия:</span><b id="tgSettingsVersion">—</b></div>
+              <div class="row top-gap">
+                <button class="btn btn-red" id="btnTgToggle">Запустить / остановить</button>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Папка</h3>
+              <div class="row"><input type="text" id="cfgTgDir" readonly><button class="btn" id="btnTgChooseDir">Выбрать…</button><button class="btn ghost" id="btnTgOpenFolder">Открыть</button></div>
+              <label class="switch top-gap"><input type="checkbox" id="togTgAutoStart"><span class="slider"></span><span class="switch-label">Автоматически запускать TG Proxy вместе с лаунчером</span></label>
+            </div>
+            <div class="card">
+              <h3>Прокси</h3>
+              <div class="row"><label class="field">Host<input type="text" id="tgHost"></label><label class="field">Порт<input type="number" id="tgPort" min="1" max="65535"></label></div>
+              <div class="row top-gap"><label class="field">Secret<input type="text" id="tgSecret" placeholder="необязательно"></label><label class="field">DC IP<input type="text" id="tgDcIp"></label></div>
+              <div class="row top-gap"><label class="field">Buffer<input type="number" id="tgBuffer" min="1"></label><label class="field">Pool<input type="number" id="tgPool" min="1"></label><label class="field">Keepalive, сек.<input type="number" id="tgKeepalive" min="0"></label></div>
+              <label class="switch top-gap"><input type="checkbox" id="tgCfproxy"><span class="slider"></span><span class="switch-label">CF proxy</span></label>
+              <label class="switch"><input type="checkbox" id="tgForceDc"><span class="slider"></span><span class="switch-label">Принудительно тестировать DC</span></label>
+              <button class="btn btn-red top-gap" id="btnTgSave">Сохранить настройки</button>
+              <p class="hint">Настройки сохраняются в переносимом каталоге tg-ws-proxy. При запуске используется официальный ключ --portable.</p>
+            </div>
+          </section>
+
+          <!-- ======== Сервис ======== -->
+          <section class="page" id="page-service">
+            <div class="card">
+              <h3>Статус</h3>
+              <div class="kv"><span>Стратегия сервиса:</span><b id="svcStrategy">—</b></div>
+              <div class="kv"><span>Сервис zapret:</span><b id="svcZapret">—</b></div>
+              <div class="kv"><span>Сервис WinDivert:</span><b id="svcWd">—</b></div>
+              <div class="kv"><span>winws.exe:</span><b id="svcWinws">—</b></div>
+              <div class="kv"><span>WinDivert64.sys:</span><b id="svcSys">—</b></div>
+              <div class="row top-gap">
+                <button class="btn" id="btnRefreshSvc">Обновить статус</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Установка сервиса (Install Service)</h3>
+              <div class="row">
+                <select id="svcBat"></select>
+                <button class="btn btn-red" id="btnInstallSvc">Установить</button>
+              </div>
+              <p class="hint">Создаёт службу Windows «zapret» с аргументами выбранной стратегии (как пункт 1 меню service.bat) и запускает её.</p>
+            </div>
+
+            <div class="card danger">
+              <h3>Удаление сервисов</h3>
+              <div class="row">
+                <button class="btn btn-red" id="btnRemoveSvc">Удалить zapret / WinDivert</button>
+              </div>
+              <p class="hint">Останавливает и удаляет службы zapret, WinDivert, WinDivert14 и завершает winws.exe (пункт 2 меню service.bat).</p>
+            </div>
+          </section>
+
+          <!-- ======== Фильтры ======== -->
+          <section class="page" id="page-filters">
+            <div class="card">
+              <h3>Game Filter</h3>
+              <div class="kv"><span>Текущий режим:</span><b id="gfStatus">—</b></div>
+              <div class="row top-gap">
+                <select id="gfMode">
+                  <option value="disabled">Выключен</option>
+                  <option value="all">TCP и UDP (all)</option>
+                  <option value="tcp">TCP</option>
+                  <option value="udp">UDP</option>
+                </select>
+              </div>
+              <div class="row top-gap">
+                <label class="field">TCP порты<input type="text" id="gfTcp" placeholder="1024-65535"></label>
+                <label class="field">UDP порты<input type="text" id="gfUdp" placeholder="1024-65535"></label>
+              </div>
+              <div class="row top-gap">
+                <button class="btn btn-red" id="btnGfSave">Сохранить</button>
+              </div>
+              <p class="hint">Записывает utils/game_filter.enabled. Перезапустите zapret, чтобы изменения применились.</p>
+            </div>
+
+            <div class="card">
+              <h3>IPSet Filter</h3>
+              <div class="kv"><span>Режим списка:</span><b id="ipsetStatus">—</b></div>
+              <div class="row top-gap">
+                <button class="btn" id="btnIpsetNone">none</button>
+                <button class="btn" id="btnIpsetLoaded">loaded</button>
+                <button class="btn" id="btnIpsetAny">any</button>
+              </div>
+              <p class="hint">Переключение режимов lists/ipset-all.txt с резервной копией. Загрузка свежего списка находится во вкладке «Обновления».</p>
+            </div>
+          </section>
+
+          <!-- ======== Фэйки ======== -->
+          <section class="page" id="page-fakes">
+            <div class="card">
+              <h3>Активные фэйки</h3>
+              <div class="kv"><span>Discord UDP:</span><b id="fkCurD">—</b></div>
+              <div class="kv"><span>GameFilter UDP:</span><b id="fkCurG">—</b></div>
+            </div>
+            <div class="card">
+              <h3>Подмена активного фэйка</h3>
+              <div class="row">
+                <select id="fkType">
+                  <option value="discord">Discord UDP</option>
+                  <option value="game">GameFilter UDP</option>
+                </select>
+                <select id="fkFile"></select>
+              </div>
+              <div class="row top-gap">
+                <button class="btn btn-red" id="btnFkReplace">Подменить</button>
+                <button class="btn ghost" id="btnFkRefresh">Обновить список</button>
+              </div>
+              <p class="hint">Сравнивает SHA-256 хэши .bin файлов в папке bin и копирует выбранный файл в ACTIVE_DISCORD_UDP.bin / ACTIVE_GAME_UDP.bin (пункт 7 меню service.bat).</p>
+            </div>
+          </section>
+
+          <!-- ======== Диагностика ======== -->
+          <section class="page" id="page-diag">
+            <div class="card">
+              <h3>Проверки системы</h3>
+              <div class="row">
+                <button class="btn btn-red" id="btnRunDiag">Запустить диагностику</button>
+                <button class="btn" id="btnRunTests">Запустить тесты</button>
+              </div>
+              <p class="hint">Полный набор проверок из service.bat (пункты 11 и 12 меню): BFE, прокси, TCP timestamps, Adguard, Killer, Intel, Check Point, SmartByte, кириллица, OneDrive, драйвер, VPN, DoH, hosts, конфликты.</p>
+            </div>
+
+            <div class="card">
+              <h3>Действия</h3>
+              <div class="row">
+                <button class="btn" id="btnFixWindivert">Починить WinDivert</button>
+                <button class="btn" id="btnFixConflicts" disabled>Удалить конфликтующие сервисы</button>
+                <button class="btn" id="btnClearDiscord">Очистить кэш Discord</button>
+                <button class="btn ghost" id="btnRunnerLog">Лог запусков</button>
+              </div>
+            </div>
+
+            <div id="diagList"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= Первый запуск ======= -->
+  <div id="onboard" class="overlay centered hidden">
+    <div class="panel small">
+      <header class="panel-head">
+        <span class="panel-title">
+          <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z"/></svg>
+          Добро пожаловать
+        </span>
+      </header>
+      <div class="onboard-body">
+        <p id="onboardText">Похоже, не все компоненты установлены. Установите их прямо из лаунчера.</p>
+        <div class="setup-status" id="setupZapretStatus"></div>
+        <div class="setup-status" id="setupTgStatus"></div>
+        <button class="btn btn-red" id="btnOnboardFolder">Выбрать папку zapret</button>
+        <button class="btn" id="btnOnboardDownload">Скачать Zapret с GitHub</button>
+        <button class="btn btn-red" id="btnOnboardTgInstall">Установить TG Proxy</button>
+        <button class="btn" id="btnOnboardSettings">Открыть настройки</button>
+        <button class="btn ghost" id="btnOnboardLater">Продолжить без установки</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

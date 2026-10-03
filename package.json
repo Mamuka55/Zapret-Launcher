@@ -1,0 +1,51 @@
+{
+  "name": "zapret-launcher",
+  "productName": "Zapret Launcher",
+  "version": "1.3.3",
+  "description": "Zapret Launcher",
+  "type": "module",
+  "main": "src/main/main.js",
+  "author": "zapret-launcher",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test:unit": "node --test tests/unit.test.mjs tests/imports.test.mjs tests/renderer-syntax.test.mjs tests/runner-updater.test.mjs tests/settings.test.mjs",
+    "test:smoke": "node --test tests/smoke.test.mjs",
+    "test": "npm run test:unit && npm run test:smoke",
+    "dist": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.zapret.launcher",
+    "productName": "Zapret Launcher",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "build/icon.png",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "portable": {
+      "artifactName": "ZapretLauncher-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "ZapretLauncher-${version}-setup.exe",
+      "shortcutName": "Zapret Launcher"
+    }
+  }
+}
