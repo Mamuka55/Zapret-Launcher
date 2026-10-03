@@ -10,7 +10,7 @@ import { TgProxyManager } from './tgProxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes('--smoke');
-const BUILD = 'm1.3.3';
+const BUILD = 'm1.3.4';
 let tgProxyProcess = null;
 
 // имя приложения для диспетчера задач и панели задач Windows

@@ -241,10 +241,14 @@ export function registerIpc() {
     try {
       const cfg = getConfig();
       const latest = await updater.fetchLatestRelease(cfg.appRepo);
-      if (!updater.isNewer(latest.version, app.getVersion())) return { ok: false, error: 'already-latest', version: app.getVersion() };
+      if (!updater.isNewer(latest.version, app.getVersion())) return { ok: true, updated: false, alreadyLatest: true, version: app.getVersion(), remote: latest.version };
       const portable = !!process.env.PORTABLE_EXECUTABLE_DIR;
       const asset = updater.getAppUpdateAsset(latest, portable);
-      if (!asset?.browser_download_url) return { ok: false, error: 'В релизе нет EXE установщика/portable.' };
+      if (!asset?.browser_download_url) {
+        const names = (latest.assets || []).map((a) => a?.name).filter(Boolean);
+        const detail = names.length ? ` Найдены: ${names.join(', ')}` : ' GitHub не вернул ассеты.';
+        return { ok: false, error: `В релизе не найден подходящий EXE для ${portable ? 'portable' : 'установщика'}.${detail}` };
+      }
       send('evt:update-progress', { percent: 0, stage: 'Загрузка обновления приложения…' });
       const exe = await updater.downloadAsset(asset.browser_download_url, asset.name, (percent) => send('evt:update-progress', { percent, stage: 'Загрузка обновления приложения…' }), asset.digest || null);
       if (portable) {

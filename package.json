@@ -1,7 +1,7 @@
 {
   "name": "zapret-launcher",
   "productName": "Zapret Launcher",
-  "version": "1.3.3",
+  "version": "1.3.5",
   "description": "Zapret Launcher",
   "type": "module",
   "main": "src/main/main.js",

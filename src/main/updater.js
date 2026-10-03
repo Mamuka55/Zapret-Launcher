@@ -9,7 +9,7 @@ import { sh } from './util.js';
 const API = (repo) => `https://api.github.com/repos/${repo}/releases/latest`;
 const RAW_VERSION = (repo) => `https://raw.githubusercontent.com/${repo}/main/.service/version.txt`;
 
-const USER_AGENT = 'Zapret-Launcher/1.3.3';
+const USER_AGENT = 'Zapret-Launcher/1.3.5';
 const MAX_REDIRECTS = 6;
 const HTTPS_TIMEOUT = 30000;
 
@@ -356,8 +356,43 @@ export async function downloadAsset(url, fileName, onProgress, expectedDigest = 
 }
 
 export function getAppUpdateAsset(release, portable = false) {
-  const suffix = portable ? '-portable\.exe$' : '-setup\.exe$';
-  return findReleaseAsset(release, [new RegExp(`^ZapretLauncher-${release.version}${suffix}`, 'i')]);
+  const assets = Array.isArray(release?.assets) ? release.assets : [];
+  const version = String(release?.version || '').replace(/^v/i, '');
+  const tagVersion = String(release?.tagName || '').replace(/^v/i, '');
+  const wantedVersion = version || tagVersion;
+  const versionEscaped = wantedVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const versionRx = versionEscaped ? new RegExp(`(?:^|[^0-9])(?:v)?${versionEscaped}(?:[^0-9]|$)`, 'i') : null;
+  const exeAssets = assets.filter((a) => /\.exe$/i.test(String(a?.name || '')) && a?.browser_download_url);
+  if (!exeAssets.length) return null;
+
+  const matchesVersion = (a) => !versionRx || versionRx.test(String(a?.name || ''));
+  const isPortable = (a) => /portable/i.test(String(a?.name || ''));
+  const isInstaller = (a) => /(setup|installer|install)/i.test(String(a?.name || ''));
+  const isOtherComponent = (a) => /(tg[-_ ]?ws|tgproxy|proxy|winws|windivert)/i.test(String(a?.name || ''));
+
+  // Предпочтительный вариант: совпадает версия и явно указан тип сборки.
+  const preferred = exeAssets.find((a) => matchesVersion(a) && (portable ? isPortable(a) : isInstaller(a)));
+  if (preferred) return preferred;
+
+  // Для portable ищем любой EXE с нужной версией и словом portable.
+  if (portable) {
+    const portableAsset = exeAssets.find((a) => matchesVersion(a) && isPortable(a));
+    if (portableAsset) return portableAsset;
+  }
+
+  // Для setup допускаем нестандартное название, если это явно не другой компонент.
+  if (!portable) {
+    const setupLike = exeAssets.find((a) => matchesVersion(a) && !isPortable(a) && !isOtherComponent(a));
+    if (setupLike) return setupLike;
+  }
+
+  // Если релиз содержит только один EXE, тип определить невозможно — используем его.
+  if (exeAssets.length === 1) return exeAssets[0];
+
+  // Последний fallback для старых релизов без версии в имени: setup/installer,
+  // а для portable — явно помеченный portable.
+  if (portable) return exeAssets.find(isPortable) || null;
+  return exeAssets.find((a) => !isPortable(a) && !isOtherComponent(a)) || exeAssets.find(isInstaller) || null;
 }
 
 export { isNewer };

@@ -597,7 +597,13 @@ async function init() {
   };
   $('#btnAppUpdate').onclick = async () => {
     const res = await window.api.runAppUpdate();
-    if (!res?.ok) toast(`Не удалось обновить приложение: ${res?.error || 'ошибка'}`, 'warn');
+    if (res?.ok && res?.alreadyLatest) {
+      state.appUpdate = { ...(state.appUpdate || {}), hasUpdate: false, local: res.version || state.appUpdate?.local, remote: res.version || state.appUpdate?.remote };
+      renderAppUpdate();
+      toast(`Установлена последняя версия ${res.version || state.appUpdate?.local || ''}.`, 'ok');
+    } else if (!res?.ok) {
+      toast(`Не удалось обновить приложение: ${res?.error || 'ошибка'}`, 'warn');
+    }
   };
   setColorRow('#accentColor', '#accentHex', 'accentColor');
   setColorRow('#backgroundColor', '#backgroundHex', 'backgroundColor');
