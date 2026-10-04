@@ -908,8 +908,29 @@ async function ensureCore(core) {
 function findExe(root,name){if(fs.existsSync(path.join(root,name)))return path.join(root,name); for(const ent of fs.readdirSync(root,{withFileTypes:true})){if(ent.isDirectory()){const p=findExe(path.join(root,ent.name),name);if(p)return p;}}return null;}
 
 async function validateCore(exe, configPath) {
-  try { await execFileAsync(exe,['run','-test','-config',configPath],{windowsHide:true,timeout:25000}); return true; }
-  catch (e) { const msg=String(e?.stderr||e?.stdout||e?.message||e); throw new Error(`Проверка конфигурации не пройдена: ${msg.slice(0,1200)}`); }
+  // Флаги проверки конфигурации различаются у ядер:
+  //   xray      : `xray -test -config <файл>`        (без подкоманды run!)
+  //   sing-box  : `sing-box check -c <файл>`          (`-t`/`-test` не поддерживаются)
+  const name = path.basename(exe).toLowerCase();
+  const args = name.startsWith('sing-box')
+    ? ['check', '-c', configPath]
+    : ['-test', '-config', configPath];
+  try {
+    await execFileAsync(exe, args, { windowsHide: true, timeout: 25000 });
+    return true;
+  } catch (e) {
+    const raw = String(e?.stderr || e?.stdout || e?.message || e);
+    // Не показываем в UI «кракозябры»: байты CP866/OEM декодируем в читаемый текст.
+    let msg = raw;
+    try {
+      if (/[\u2500-\u2513\u2500-\u257F]{2}/.test(raw)) {
+        const bytes = Uint8Array.from(Buffer.from(raw, 'binary'));
+        const fixed = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+        if (/[\u0400-\u04FF]/.test(fixed)) msg = fixed;
+      }
+    } catch {}
+    throw new Error(`Проверка конфигурации не пройдена: ${msg.slice(0, 1200)}`);
+  }
 }
 
 async function findFreeTcpPort(startPort, reserved=new Set()) {

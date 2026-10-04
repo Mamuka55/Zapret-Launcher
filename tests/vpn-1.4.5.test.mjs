@@ -134,9 +134,24 @@ test('TUN fixes: adapter name normalized, tunCore singbox alias mapped, wintun p
   assert.doesNotMatch(app,/tunCore:[^,]*\|\|\s*'singbox'/);
 });
 
-test('Core log mojibake (CP866) is decoded and TUN errors get a readable message',()=>{
+test('Core log mojibake (CP866-as-UTF8) is decoded and TUN errors get a readable message',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
-  assert.match(proxy,/TextDecoder\('cp866'\)/);
+  // Логи ядер приходят как UTF-8, отображённый в CP866 (символы ╨..╤ из U+2500-U+2513).
+  // Декодирование: восстановление байтов + TextDecoder('utf-8').
+  assert.match(proxy,/Buffer\.from\(\s*\w+\s*,\s*'binary'\s*\)/);
+  assert.match(proxy,/new TextDecoder\('utf-8'/);
+  assert.match(proxy,/\\u2500-\\u2513/);
   assert.match(proxy,/Failed to find matching adapter name/);
   assert.match(proxy,/Не удалось создать TUN-адаптер/);
+});
+
+test('validateCore uses correct CLI flags per core (sing-box: check -c, xray: -test -config)',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  // sing-box не поддерживает `run -test` / `-t` — только `check -c`
+  assert.match(proxy,/async function validateCore\(exe, configPath\)/);
+  assert.match(proxy,/path\.basename\(exe\)\.toLowerCase\(\)/);
+  assert.match(proxy,/\['check',\s*'-c',\s*configPath\]/);
+  // xray проверяется без подкоманды run
+  assert.match(proxy,/\['-test',\s*'-config',\s*configPath\]/);
+  assert.doesNotMatch(proxy,/exe,\s*\[\s*'run',\s*'-test'/);
 });
