@@ -1,167 +1,199 @@
-# Zapret Launcher
+# 🚀 Zapret Launcher
 
-## 1.4.3
+## 🏷️ v1.4.10
 
-Исправлен VPN: добавлен Windows curl/HTTP2 fallback для подписок с HTTP 502/503/504, расширен разбор нативного Xray JSON, включая `outbounds → settings → vnext/servers`, VPN переведён в TG-style категорию. Добавление подписки выполняется только по Enter; отдельной кнопки «Добавить подписку» и глобальной кнопки подключения больше нет. Подключение и отключение выполняется повторным нажатием на плитку сервера. Плитки используют общий стиль Zapret и показывают название, ping и протоколы. Глобальное автоподключение отключено.
+🧊 Стеклянный (red/gray glassmorphism) лаунчер проекта **zapret-discord-youtube** с единым центром управления **Zapret, Proxy/VPN и Telegram Proxy**.
 
-## 1.4.2
+🛡️ Плитки стратегий с включением/выключением в один клик, ⭐ избранное, ⚙️ единые настройки, 🌐 встроенный Proxy/VPN Center для Xray/sing-box, подписок, системного прокси, TUN и смешанного режима, 🧩 `service.bat` в едином окне и 🔄 автообновление с GitHub.
 
-Исправлен Proxy / VPN Center: подписки с HTTPS теперь автоматически получают несколько вариантов User-Agent, поддерживаются JSON/обёртки/вложенные конфигурации, base64 и gzip/deflate/brotli, служебные VLESS-записи `0.0.0.0:1` отбрасываются. На главном экране VPN оставлена только строка добавления подписки; обновление и ping — компактные иконки, серверы отображаются в стеклянных плитках в стиле Zapret. Все остальные параметры VPN, импорт и управление подписками находятся в отдельной вкладке **VPN** настроек.
-
-
-Стеклянный (red/gray glassmorphism) лаунчер батников проекта **zapret-discord-youtube**:
-плитки стратегий с включением/выключением в один клик, избранное, единые настройки,
-встроенный Proxy/VPN Center для Xray/sing-box, подписок, TUN и маршрутизации,
-`service.bat` в едином окне и автообновление с GitHub. Electron + Vanilla JS,
-без тяжёлых зависимостей.
+⚡ Electron + Vanilla JS, без тяжёлых зависимостей.
 
 ![Стеклянные плитки](build/icon.png)
 
 ---
 
-## Возможности
+## ✨ Возможности
 
 | Требование | Реализация |
 |---|---|
-| Плитки с названием стратегии | Автопоиск `*.bat` в папке zapret, номер в имени не показывается, сортировка «как человек» (`1, 2, 10`) |
-| Вкл/выкл в один клик | Клик по плитке запускает батник скрыто (`windowsHide`) или завершает его дерево процессов (`taskkill /T /F`) |
-| Статус запущен/остановлен | Зелёная подсветка плитки и пульсирующий индикатор, событие из main-процесса |
-| Избранное | Звёздочка на плитке, отдельная секция, хранится в конфиге |
-| Единое окно настроек | Шестерёнка в заголовке: папка, обновления, сервис, Game/IPSet-фильтры, фэйки, hosts, диагностика, тесты |
-| Автообновление | Сравнение `LOCAL_VERSION` из `service.bat` с релизом GitHub, скачивание zip с прогрессом, замена файлов; новые/удалённые батники сами появляются/исчезают с плиток |
-| Права администратора | UAC запрашивается **один раз** при старте собранного exe (`requestedExecutionLevel: requireAdministrator`) |
-| Тесты | `npm test` = юнит-тесты логики (`node --test`) + smoke-тест UI (запуск окна, проверка плиток и элементов) |
-| Proxy/VPN | Встроенный центр подключений: VLESS, VLESS Reality, VMess, Trojan, Shadowsocks, SOCKS5; Hysteria2 и WireGuard через sing-box |
-| Подписки | Добавление по URL, автоматическое обновление, удаление серверов подписки вместе с подпиской |
-| Импорт | URI ключей, Xray JSON, sing-box JSON, WireGuard `.conf`, `incy://routing/...` и `happ://routing/...` для открытых routing-профилей |
-| Режимы | Системный HTTP/SOCKS-прокси и TUN через Xray/Wintun либо sing-box |
-| Маршрутизация | Профили proxy/direct/block, DNS-параметры и MTU |
-| Диагностика proxy | Проверка TCP latency для всех серверов и выбор активного сервера |
-| Трей | Фоновый запуск с быстрыми командами подключения/отключения прокси |
-| Сборка | `npm run dist` → portable + setup exe через electron-builder |
-
-Дополнительно: демо-режим с тестовыми плитками, тосты, онбординг при первом запуске,
-баннер «нет прав администратора», баннер обновления с прогресс-баром.
+| 🧩 Плитки стратегий | 🔎 Автопоиск `*.bat` в папке zapret, номер в имени не показывается, сортировка «как человек» (`1, 2, 10`) |
+| ⚡ Вкл/выкл в один клик | 🖱️ Клик по плитке запускает батник скрыто или завершает его дерево процессов |
+| 🟢 Статус запущен/остановлен | 💡 Зеленая подсветка плитки и индикатор состояния |
+| ⭐ Избранное | 🌟 Звездочка на плитке, отдельная секция, хранение в конфиге |
+| 🛡️ Zapret | 🎯 Управление стратегиями и `service.bat` из единого интерфейса |
+| 🌐 Proxy/VPN Center | 🔐 VLESS, VLESS Reality, VMess, Trojan, Shadowsocks, SOCKS5, Hysteria2 и WireGuard через sing-box |
+| ✈️ Telegram Proxy | 📦 Установка, запуск, остановка, настройки и обновление `tg-ws-proxy` |
+| 📋 Подписки | 🔗 Добавление по URL, обновление и управление серверами подписки |
+| 📥 Импорт | 🔑 URI-ключи, Xray JSON, sing-box JSON, WireGuard `.conf`, открытые routing-профили |
+| 🖥️ Системный прокси | 🌍 HTTP proxy через `127.0.0.1:10809` с интеграцией Windows |
+| 🔀 TUN | 🛜 Windows TUN через Wintun с автоматической маршрутизацией |
+| 🔗 Смешанный режим | 🌐 Одновременная работа TUN и системного proxy |
+| 🧭 Маршрутизация | 🎛️ Proxy/direct/block, DNS-параметры и сетевые настройки |
+| 📡 Проверка ping | ⚡ Параллельная проверка серверов и быстрый выбор рабочего сервера |
+| 🔄 Обновление подписок | 🚀 Асинхронное обновление без блокировки интерфейса |
+| 🎞️ Анимации | ✨ Подключение, ping и обновление подписки имеют отдельные состояния загрузки |
+| 🎨 Интерфейс | 🧊 Glassmorphism, компактные кнопки, плавное обновление плиток без мигания |
+| 📥 Трей | 🔔 Фоновый запуск и быстрый доступ к подключению |
+| 🔄 Автообновление | ⬇️ Проверка GitHub Releases, загрузка и установка новой версии |
+| 🔐 Права администратора | 🛡️ UAC для операций, требующих повышенных прав |
+| 📦 Сборка | 🏗️ `npm run dist` → portable + setup через electron-builder |
 
 ---
 
-## Запуск в режиме разработки
+## 🌐 Proxy / VPN Center
+
+📁 Proxy Center хранит данные отдельно от файлов zapret:
+
+```text
+%AppData%/Zapret Launcher/proxy
+```
+
+Поддерживаются:
+
+- 🔗 `vless://`
+- 🔗 `vmess://`
+- 🔗 `trojan://`
+- 🔗 `ss://`
+- 🔗 `socks5://`
+- 🔗 `socks://`
+- 🔗 `hysteria2://`
+- 🔗 `hy2://`
+- 📄 WireGuard `.conf`
+- 📄 Xray JSON
+- 📄 sing-box JSON
+- 🔀 открытые `incy://routing/...`
+- 🔀 открытые `happ://routing/...`
+
+⭐ Серверы можно добавлять вручную, импортировать или получать из подписок.
+
+🎯 Доступны избранное, 📡 ping, 🔄 обновление подписок и выбор активного сервера.
+
+---
+
+## ✈️ Telegram Proxy
+
+Отдельный модуль для `tg-ws-proxy`.
+
+Поддерживаются:
+
+- 📥 установка;
+- ▶️ запуск и ⏹️ остановка;
+- ⚙️ настройки;
+- 🔄 обновление;
+- 🧩 отдельная плитка в интерфейсе.
+
+Telegram Proxy не смешивается с конфигурацией основного Proxy/VPN Center.
+
+---
+
+## 🎨 Интерфейс
+
+Актуальная версия включает:
+
+- 🔌 анимацию подключения к серверу;
+- 📡 анимацию проверки ping;
+- 🔄 анимацию обновления подписки;
+- 🎛️ обновленные кнопки управления;
+- ⚡ компактные действия для ping и подписок;
+- 📂 плавное сворачивание секций;
+- ⭐ сохранение DOM-плиток избранного без кратковременного исчезновения;
+- 🔔 toast-уведомления и состояния загрузки.
+
+---
+
+## 💻 Запуск в режиме разработки
 
 ```bash
-npm install        # поставит electron и electron-builder
-npm start          # открыть окно лаунчера
-npm test           # юнит-тесты логики + smoke-тест UI
-npm run dist       # собрать portable/setup .exe (Windows)
+npm install
+npm start
+npm test
+npm run dist
 ```
 
-Smoke-тест открывает реальное окно Electron в headless-режиме (`--smoke`),
-проверяет структуру окна, плитки и звёздочки избранного; в CI работает под `xvfb-run`.
+🚀 `npm start` запускает Electron Launcher.
 
-При первом запуске появится онбординг: выбрать папку zapret, скачать релиз с GitHub
-или включить демо-режим (тестовые плитки из `demo-bats/`).
+📦 `npm run dist` собирает Windows portable/setup через electron-builder.
 
 ---
 
-## Структура
+## 📁 Структура
 
-```
+```text
 src/
-  main/            # основной процесс Electron
-    main.js        # окно без рамки (frame:false, transparent), smoke-режим
-    ipc.js         # каналы preload <-> main
-    config.js      # конфиг (папка, избранное, флаги) в userData
-    scanner.js     # поиск *.bat, fs.watch за папкой
-    runner.js      # скрытый запуск/остановка батников, дерево процессов
-    updater.js     # GitHub releases: проверка, скачивание zip/EXE, установка
-    service.js     # сервис, фильтры, фэйки, hosts, install/uninstall
-    tgProxy.js     # загрузка/обновление и управление tg-ws-proxy
-    diagnostics.js # 20+ проверок системы из service.bat
-    lib/pure.js    # чистая логика (версии, порты, парсинг) — покрыта юнит-тестами
-  preload/         # contextBridge (contextIsolation: true)
-  renderer/        # интерфейс: index.html, styles.css (glassmorphism), app.js
-tests/             # unit + renderer/settings checks, smoke.test.mjs
-demo-bats/         # тестовые плитки для демо-режима и smoke-теста
-.github/workflows/ci.yml  # CI: юниты, smoke под xvfb, сборка exe
+  main/
+    main.js
+    ipc.js
+    config.js
+    scanner.js
+    runner.js
+    updater.js
+    service.js
+    tgProxy.js
+    diagnostics.js
+    proxy.js
+    lib/
+  preload/
+  renderer/
+    index.html
+    styles.css
+    app.js
+
+tests/
+demo-bats/
+
+.github/
+  workflows/
 ```
 
-## Конфиг
+---
 
-Хранится в `userData/settings.json` ( `%AppData%/zapret-launcher` ):
-папка zapret, репозиторий GitHub, избранное, флаги `closeScriptsOnExit`,
-`autoCheckUpdates` (синхронизируется с `utils/check_updates.enabled`), автозапуск.
+## ⚙️ Конфигурация
 
-## Примечания
+Основные пользовательские настройки хранятся в `userData/settings.json`.
 
-- Сборка exe требует Windows (electron-builder); в CI артефакты собираются на `windows-latest`.
-- Без прав администратора лаунчер работает, но показывает предупреждение: установка
-  сервиса/WinDivert и правка hosts будут недоступны.
-- Диапазоны портов Game Filter валидируются как в `service.bat`
-  (`1024-65535`, списки через запятую, иначе — откат к значениям по умолчанию).
+Proxy/VPN данные находятся отдельно:
 
-
-## Версия 1.3.4
-- отдельная категория `tg-ws-proxy` с загрузкой, запуском/остановкой, настройками и обновлением;
-- избранные батники больше не дублируются в общем списке;
-- отдельная проверка и установка обновления самого Zapret Launcher из GitHub Releases;
-- гибкая палитра акцентного и фонового цвета через системный color picker;
-- GitHub Actions workflow публикует EXE в Releases при push тега `v*`.
-
-Для обновления самого приложения репозиторий должен иметь GitHub Release с ассетами `ZapretLauncher-<version>-setup.exe` и/или `ZapretLauncher-<version>-portable.exe`.
-
-
-### Первый релиз для автообновления
-После добавления этого проекта в GitHub достаточно создать тег вида `v1.3.4` и отправить его:
-
-```bash
-git tag v1.3.4
-git push origin v1.3.4
+```text
+%AppData%/Zapret Launcher/proxy
 ```
 
-Workflow `.github/workflows/release.yml` на Windows сначала синхронизирует версию `package.json` с тегом, затем соберёт `setup.exe` и `portable.exe` и опубликует их в Releases. Лаунчер затем сможет видеть новый релиз через GitHub API.
+Здесь хранятся серверы, подписки, ⭐ избранное, routing-профили и параметры подключения.
 
+---
 
-### Каталоги компонентов
+## 🧩 Компоненты
 
-Автоматическая установка размещает Zapret в `Documents\Zapret Launcher\zapret`, а TG Proxy — в `Documents\Zapret Launcher\tg-ws-proxy`. Плитка TG Proxy показывается только после успешной установки.
+Проект использует:
 
+- 🛡️ Zapret
+- 🌐 Xray
+- 🔄 sing-box
+- ✈️ Telegram Proxy
+- 🛜 Wintun
+- ⚡ Electron
+- 🟢 Node.js
 
-## Proxy Center 1.4.0
+📄 Полные лицензии и уведомления о сторонних компонентах находятся в `THIRD-PARTY-NOTICES.md`.
 
-Proxy Center хранит данные в `%AppData%/zapret-launcher/proxy`: серверы, подписки, routing-профили и настройки не смешиваются с файлами zapret.
+---
 
-### Поддерживаемые открытые форматы
+## 📥 Установка
 
-- `vless://`, в том числе Reality
-- `vmess://`
-- `trojan://`
-- `ss://`
-- `socks5://` / `socks://`
-- `hysteria2://` / `hy2://`
-- WireGuard `.conf`
-- Xray/sing-box JSON
-- открытые `incy://routing/...` и `happ://routing/...` профили маршрутизации
+1. 📦 Скачайте актуальный Release.
+2. 📂 Распакуйте архив.
+3. ▶️ Запустите Launcher.
+4. 🌐 Добавьте сервер или импортируйте подписку.
+5. 🔀 Выберите необходимый режим.
+6. 🚀 Подключитесь.
 
-Зашифрованные фирменные ссылки HAPP/INCY с закрытой схемой шифрования намеренно не реализованы.
+Для TUN требуется установленный Wintun и необходимые права Windows.
 
-### Ядра
+🔐 Не публикуйте в Issues или Pull Requests приватные URI, UUID, ключи Reality, токены подписок и параметры Telegram Proxy.
 
-Xray-core и sing-box не вшиваются в репозиторий и скачиваются по требованию из их официальных GitHub Releases. Для Xray Windows-архив содержит Wintun, необходимый для TUN на Windows.
+---
 
-### Ограничения 1.4.0
+## ⚠️ Disclaimer
 
-Полноценный per-app proxy и безопасный системный kill switch требуют отдельной реализации на уровне Windows Filtering Platform; в этой версии они не включены, чтобы не менять глобальную политику брандмауэра или сетевые интерфейсы пользователя неожиданным образом.
+Проект предоставляется «как есть».
 
-
-### v13 TUN health-check fix
-- TUN readiness now validates a real IPv4 HTTP request bound to the TUN address.
-- HTTPS/Schannel is no longer used as the primary TUN readiness probe.
-- DNS is bypassed in the probe with curl `--resolve`.
-- On Windows, route diagnostics are logged before the probe.
-
-
-### TUN health-check (v14)
-On Windows the TUN health-check does not bind curl to the TUN gateway address. It verifies the automatic system route and then sends an IPv4 HTTP request through the normal Windows routing table, avoiding curl error 45 from `--interface 198.18.0.1`.
-
-
-### v15 TUN routing fix
-Windows TUN mode now uses two IPv4 /1 system routes instead of a single /0 route. This avoids route-preference ties with the physical network adapter. IPv6 system routing is disabled in this compatibility fix so link-local DNS traffic is not pulled into the TUN path.
+Пользователь самостоятельно отвечает за используемые серверы, конфигурации, сетевые настройки, безопасность своих ключей и соблюдение применимого законодательства.
