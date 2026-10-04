@@ -177,3 +177,23 @@ test('validateCore uses correct CLI flags per core (sing-box: check -c, xray: -t
   assert.match(proxy,/\['-test',\s*'-config',\s*configPath\]/);
   assert.doesNotMatch(proxy,/exe,\s*\[\s*'run',\s*'-test'/);
 });
+
+
+test('sing-box 1.14+ uses current route actions and no removed sniff fields',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/action:'sniff'/);
+  assert.match(proxy,/action:'route', outbound:'proxy'/);
+  assert.match(proxy,/action:'route', outbound:'direct'/);
+  assert.match(proxy,/action:'route', outbound:'block'/);
+  assert.doesNotMatch(proxy,/route:\{[^}]*sniff:true/);
+  assert.doesNotMatch(proxy,/strict_route:false,sniff:true/);
+  assert.doesNotMatch(proxy,/outbound_tag:/);
+});
+
+test('VPN verification diagnoses local ports before stopping the core',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  const verifyPos=proxy.indexOf("const check=await verifyOutboundViaHttpProxy(settings.httpPort,15000)");
+  const detailPos=proxy.indexOf('const detail=await describeVerifyFailure()', verifyPos);
+  const killPos=proxy.indexOf('proc.kill()', detailPos);
+  assert.ok(verifyPos>=0 && detailPos>verifyPos && killPos>detailPos);
+});

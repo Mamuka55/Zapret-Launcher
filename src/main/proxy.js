@@ -823,13 +823,19 @@ function routeForConfig(routeProfile) {
 }
 
 // Те же правила в формате sing-box (route.rules + route.final).
-function singboxRouteRules() {
+function singboxRouteRules({includeTunSniff=false} = {}) {
   const r=routes.find(x=>x.id===settings.routeProfile) || routes[0];
   const rules=[];
+
+  // sing-box 1.13+ removed legacy route/inbound sniff fields.
+  // In TUN mode sniffing is now an explicit route action.
+  if (includeTunSniff) rules.push({inbound:['tun-in'], action:'sniff'});
+
   if (r?.mode==='split') {
-    if (r.block?.length) rules.push({domain:r.block, outbound_tag:'block'});
-    if (r.direct?.length) rules.push({domain:r.direct, outbound_tag:'direct'});
-    if (r.domains?.length) rules.push({domain:r.domains, outbound_tag:'proxy'});
+    // sing-box 1.11+ uses route actions instead of the legacy outbound_tag field.
+    if (r.block?.length) rules.push({domain:r.block, action:'route', outbound:'block'});
+    if (r.direct?.length) rules.push({domain:r.direct, action:'route', outbound:'direct'});
+    if (r.domains?.length) rules.push({domain:r.domains, action:'route', outbound:'proxy'});
   }
   return rules;
 }
@@ -884,19 +890,31 @@ function finalizeXrayConfig(cfg, server) { cfg.outbounds=[{tag:'proxy',...xrayOu
 
 function buildSingboxConfig(server, mode='tun') {
   const outbound=singboxOutbound(server);
-  const routeRules=singboxRouteRules();
+  const localInbounds=[
+    {type:'mixed',tag:'mixed-http-in',listen:'127.0.0.1',listen_port:Number(settings.httpPort||10809)},
+    {type:'mixed',tag:'mixed-socks-in',listen:'127.0.0.1',listen_port:Number(settings.socksPort||10808)}
+  ];
   if (mode==='proxy') {
-    return {log:{level:'warn'},inbounds:[{type:'mixed',tag:'mixed-in',listen:'127.0.0.1',listen_port:Number(settings.httpPort||10809)}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{final:'proxy',auto_detect_interface:true,rules:routeRules}};
+    return {
+      log:{level:'warn'},
+      inbounds:localInbounds,
+      outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],
+      route:{final:'proxy',auto_detect_interface:true,rules:singboxRouteRules()}
+    };
   }
-  // ВАЖНО: без route.final весь принятый TUN-ом трафик уходил НАПРЯМУЮ (в обход
-  // сервера): интерфейс поднят, «VPN работает», но реальный IP не меняется.
-  // interface_name — нормализованное имя (латиница, <=31 символ), иначе Windows
-  // отказывает в создании адаптера («Элемент не найден», Code 0x00000490).
-  // ВАЖНО: `sniff` — это поле блока route (синтаксис sing-box >=1.11). В более
-  // старых ядрах оно вызывает "unknown field \"sniff\"" и падение валидации,
-  // поэтому добавляется только если пользовательское поле tunSniff явно включено.
-  const sniffer = settings.tunSniff === true ? {sniff:true} : {};
-  return {log:{level:'warn'},inbounds:[{type:'tun',tag:'tun-in',interface_name:tunAdapterName(),address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:false}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{final:'proxy',auto_detect_interface:true,...sniffer,rules:routeRules}};
+
+  // sing-box 1.13+ removed legacy inbound.sniff and route.sniff fields.
+  // Sniffing is configured through an explicit route action instead.
+  // interface_name — normalized Windows-safe name (Latin letters/digits/-/_).
+  return {
+    log:{level:'warn'},
+    inbounds:[
+      ...localInbounds,
+      {type:'tun',tag:'tun-in',interface_name:tunAdapterName(),address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:false}
+    ],
+    outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],
+    route:{final:'proxy',auto_detect_interface:true,rules:singboxRouteRules({includeTunSniff:true})}
+  };
 }
 
 async function powerShellExpand(zip, dest) {
@@ -1242,9 +1260,9 @@ async function describeVerifyFailure(){
   const httpOk = await tcpConnectOk('127.0.0.1', settings.httpPort||10809);
   const socksOk = await tcpConnectOk('127.0.0.1', settings.socksPort||10808);
   if(!httpOk && !socksOk){
-    return 'Ядро запущено, но его локальные порты не отвечают — возможно, порты заняты другим приложением или включён режим «только TUN без локальных портов». Попробуйте перезапустить приложение от имени администратора.';
+    return 'VPN-ядро запущено, но локальные HTTP/SOCKS-порты не отвечают. Проверьте, не заняты ли порты другим приложением, и повторите запуск.';
   }
-  return 'Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет. Обычно это означает, что до удалённого сервера нет связи (неверный адрес/порт/ключ, сервер недоступен или протокол заблокирован). Попробуйте другой сервер или тип подключения (ws/reality/grpc).';
+  return 'Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет. Локальный прокси при этом отвечает, поэтому проблема, скорее всего, на удалённом сервере: проверьте адрес, порт и ключ, доступность сервера и тип подключения (WS/Reality/gRPC), затем попробуйте другой сервер.';
 }
 
 export async function start(opts={}) {
@@ -1322,8 +1340,11 @@ export async function start(opts={}) {
         // Иначе UI показывал бы «работает» при недоступном/неисправном удалённом сервере.
         const check=await verifyOutboundViaHttpProxy(settings.httpPort,15000);
         if(!check.ok){
+          // Диагностируем до остановки процесса: после kill локальные порты закономерно
+          // закрыты, поэтому старый порядок всегда выдавал ложное «локальные порты не отвечают».
+          const detail=await describeVerifyFailure();
           try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
-          throw new Error(await describeVerifyFailure());
+          throw new Error(detail);
         }
         runtime.publicIp=check.ip;
         if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }
