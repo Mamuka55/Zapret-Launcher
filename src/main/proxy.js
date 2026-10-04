@@ -54,7 +54,7 @@ const DEFAULTS = {
   httpAuthMode: 'disable',
   httpAuthUser: '',
   httpAuthPassword: '',
-  tunCore: 'singbox'
+  tunCore: 'sing-box'
 };
 
 let runtime = { proc: null, core: null, mode: 'proxy', configPath: null, systemProxyChanged: false, ready: false, trafficSeen: false };
@@ -82,6 +82,7 @@ function idFor(seed) { return crypto.createHash('sha1').update(seed).digest('hex
 function init() {
   ensureDirs();
   settings = { ...DEFAULTS, ...(readJson(path.join(DATA_DIR(), 'settings.json'), {}) || {}) };
+  normalizeTunSettings(settings);
   servers = Array.isArray(readJson(SERVERS_FILE(), [])) ? readJson(SERVERS_FILE(), []) : [];
   // Удаляем старые служебные/заглушечные VLESS-записи вида 0.0.0.0:1.
   servers = servers.filter(s => !isPlaceholderServer(s));
@@ -110,6 +111,7 @@ export function getSettings() { if (!settings) init(); return structuredClone(se
 export function setSettings(patch = {}) {
   if (!settings) init();
   settings = { ...settings, ...patch };
+  normalizeTunSettings(settings);
   save();
   return getSettings();
 }
@@ -810,9 +812,43 @@ function routeForConfig(routeProfile) {
   return { routing:{domainStrategy:'IPIfNonMatch',rules} };
 }
 
+// Имя TUN-адаптера должно соответствовать требованиям Windows (Wintun/tun2socks):
+// только латиница/цифры/-/_ , длина до 31 символа. Пользовательское значение
+// («Имя TUN» в настройках) нормализуется, иначе ядро падает с
+// "Failed to find matching adapter name: Элемент не найден. (Code 0x00000490)".
+function normalizeTunName(name) {
+  const cleaned = String(name || '').trim().replace(/[^A-Za-z0-9\-_ ]/g, '').replace(/\s+/g, '-').replace(/^[-_]+|[-_]+$/g, '').slice(0, 31);
+  return cleaned || 'Zapret';
+}
+function tunAdapterName() { return normalizeTunName(settings?.tunName || DEFAULTS.tunName); }
+
+function normalizeTunSettings(s) {
+  if (!s) return;
+  s.tunName = normalizeTunName(s.tunName);
+  // «singbox» из старых версий настроек — недопустимое значение ядра: приводим к «sing-box».
+  if (s.tunCore === 'singbox' || s.tunCore === 'sing_box') s.tunCore = 'sing-box';
+  if (!['sing-box', 'xray'].includes(s.tunCore)) s.tunCore = DEFAULTS.tunCore;
+}
+
+// Xray ищет wintun.dll рядом с xray.exe (или в System32). Без неё режим TUN на
+// свежем Xray не поднимает интерфейс — копируем DLL из каталога sing-box при необходимости.
+async function ensureXrayWintunDll(xrayExePath) {
+  try {
+    const dir = path.dirname(xrayExePath);
+    const dst = path.join(dir, 'wintun.dll');
+    if (fs.existsSync(dst)) return true;
+    const found = findExe(CORES_DIR(), 'wintun.dll');
+    if (found) { fs.copyFileSync(found, dst); console.log('[proxy] wintun.dll скопирована в каталог Xray для режима TUN'); return true; }
+    const sys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wintun.dll');
+    if (fs.existsSync(sys)) { fs.copyFileSync(sys, dst); return true; }
+    console.warn('[proxy] wintun.dll не найдена: режим TUN на ядре Xray может быть недоступен (используйте ядро sing-box)');
+  } catch (e) { console.warn('[proxy] Не удалось подготовить wintun.dll:', e?.message || e); }
+  return false;
+}
+
 function buildXrayConfig(server, mode='proxy') {
   const route=routeForConfig(settings.routeProfile);
-  const inbounds= mode==='tun' ? [{tag:'tun-in',port:0,protocol:'tun',settings:{name:settings.tunName||'EpicTunnel',desc:'Wintun',mtu:Number(settings.mtu||1500),gateway:['198.18.0.1/15','fdfe:dcba:9876::1/126'],dns:settings.dns||['1.1.1.1','8.8.8.8'],autoSystemRoutingTable:['0.0.0.0/0','::/0'],autoSystemDns:false,autoOutboundsInterface:null}}] : [{tag:'socks-in',listen:'127.0.0.1',port:Number(settings.socksPort||10808),protocol:'socks',settings:{udp:true,accounts:settings.socksAuthMode==='manual'&&settings.socksAuthUser?[{user:settings.socksAuthUser,pass:settings.socksAuthPassword||''}]:undefined},sniffing:{enabled:true,destOverride:['http','tls','quic']}},{tag:'http-in',listen:'127.0.0.1',port:Number(settings.httpPort||10809),protocol:'http',settings:{accounts:settings.httpAuthMode==='manual'&&settings.httpAuthUser?[{user:settings.httpAuthUser,pass:settings.httpAuthPassword||''}]:undefined}}];
+  const inbounds= mode==='tun' ? [{tag:'tun-in',port:0,protocol:'tun',settings:{name:tunAdapterName(),mtu:Number(settings.mtu||1500),gateway:['198.18.0.1/15','fdfe:dcba:9876::1/126'],address:['198.18.0.1/15','fdfe:dcba:9876::1/126'],dns:settings.dns||['1.1.1.1','8.8.8.8'],poolSize:2,onDropped:'bypass'}}] :[{tag:'socks-in',listen:'127.0.0.1',port:Number(settings.socksPort||10808),protocol:'socks',settings:{udp:true,accounts:settings.socksAuthMode==='manual'&&settings.socksAuthUser?[{user:settings.socksAuthUser,pass:settings.socksAuthPassword||''}]:undefined},sniffing:{enabled:true,destOverride:['http','tls','quic']}},{tag:'http-in',listen:'127.0.0.1',port:Number(settings.httpPort||10809),protocol:'http',settings:{accounts:settings.httpAuthMode==='manual'&&settings.httpAuthUser?[{user:settings.httpAuthUser,pass:settings.httpAuthPassword||''}]:undefined}}];
   const outbounds=[{tag:'proxy',...xrayOutbound(server)},{tag:'direct',protocol:'freedom',settings:{}},{tag:'block',protocol:'blackhole',settings:{}}];
   return {log:{loglevel:'warning'},dns:{servers:[...(settings.dns||['1.1.1.1','8.8.8.8'])]},inbounds,outbounds:{}, routing:route.routing};
 }
@@ -825,7 +861,7 @@ function buildSingboxConfig(server, mode='tun') {
   if (mode==='proxy') {
     return {log:{level:'warn'},inbounds:[{type:'mixed',tag:'mixed-in',listen:'127.0.0.1',listen_port:Number(settings.httpPort||10809)}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{auto_detect_interface:true}};
   }
-  return {log:{level:'warn'},inbounds:[{type:'tun',tag:'tun-in',interface_name:settings.tunName||'EpicTunnel',address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:true}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{auto_detect_interface:true,auto_detect_path:true}};
+  return {log:{level:'warn'},inbounds:[{type:'tun',tag:'tun-in',interface_name:tunAdapterName(),address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:false}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{auto_detect_interface:true}};
 }
 
 async function powerShellExpand(zip, dest) {
@@ -924,16 +960,29 @@ async function waitForTcpListening(port, timeoutMs=12000) {
 
 async function waitForTunAdapter(name, timeoutMs=12000) {
   if(process.platform!=='win32') return true;
+  // Адаптер может называться иначе, чем запрошено (Wintun переименовывает его при
+  // пересоздании), поэтому ищем и по имени, и по описанию; кириллические символы
+  // в описании сравниваются через транслитерацию.
   const wanted=String(name||'EpicTunnel').replace(/'/g,"''");
+  const latin=latinizeName(String(name||'EpicTunnel')).replace(/'/g,"''");
   const deadline=Date.now()+timeoutMs;
   while(Date.now()<deadline){
     try {
-      const {stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`$a=Get-NetAdapter -Name '${wanted}' -ErrorAction SilentlyContinue; if($a -and $a.Status -eq 'Up'){ 'UP' }`],{windowsHide:true,timeout:2500,maxBuffer:10240});
-      if(String(stdout).trim().includes('UP')) return true;
-    } catch {}
+      const {stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-Command',
+        `$n='${wanted}';$l='${latin}';$a=@(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Wintun*' -or $_.Name -eq $n -or $_.Name -like "*$l*" }); if(($a | Where-Object { $_.Status -eq 'Up' })){ 'UP' }elseif($a.Count -gt 0){ 'DOWN' }`],{windowsHide:true,timeout:4000,maxBuffer:10240});
+      const st=String(stdout).trim();
+      if(st.includes('UP')) return true;
+      lastTunState = st==='DOWN' ? 'down' : 'none';
+    } catch { lastTunState='probe-error'; }
     await new Promise(r=>setTimeout(r,250));
   }
   return false;
+}
+let lastTunState='none';
+
+function latinizeName(s){
+  const map={а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};
+  return String(s).toLowerCase().split('').map(ch=>map[ch]!==undefined?map[ch]:ch).join('');
 }
 
 async function verifyOutboundViaHttpProxy(port, timeoutMs=12000) {
@@ -978,10 +1027,12 @@ export async function start(opts={}) {
       if(!server) { server=servers.find(s=>s.favorite) || servers[0]; if(server) settings.activeServerId=server.id; }
       if(!server) throw new Error('Сначала добавьте VPN-сервер или подписку');
       const mode=opts.mode || settings.mode || 'proxy';
+      normalizeTunSettings(settings);
       let core = mode==='tun' && settings.tunCore ? settings.tunCore : server.core;
       if(core==='auto') core=['hysteria2','wireguard'].includes(server.protocol)?'sing-box':'xray';
       if(['hysteria2','wireguard'].includes(server.protocol)) core='sing-box';
       const exe=await ensureCore(core);
+      if(mode==='tun' && core==='xray') await ensureXrayWintunDll(exe);
       if(mode==='proxy' && core==='xray') {
         const socks=await findFreeTcpPort(settings.socksPort, new Set());
         const http=await findFreeTcpPort(settings.httpPort, new Set([socks]));
@@ -996,7 +1047,28 @@ export async function start(opts={}) {
       const onCoreOutput=(d, warn=false)=>{
         const text=String(d||'');
         if(/\baccepted\b|\[tun-in\s*>>\s*proxy\]|\[http-in\s*>>\s*proxy\]|\[socks-in\s*>>\s*proxy\]/i.test(text)) runtime.trafficSeen=true;
-        (warn?console.warn:console.log)('[proxy]',text.trim());
+        // Логи ядер на Windows пишутся в OEM-кодировке (CP866) — при перенаправлении
+        // в консоль Electron кириллица превращается в «╨Т╨╜╨╡╤И╨╜╤П...». Декодируем:
+        // символы ╨-╙ из диапазона U+2500-U+2513 — это байты 0xD0-0xD3, то есть
+        // UTF-8, показанный как CP866. Восстанавливаем байты и читаем как UTF-8.
+        let decoded=text;
+        try {
+          if(/[\u2500-\u2513]{2}/.test(text)){
+            const bytes=Uint8Array.from(Buffer.from(text,'binary'));
+            const fixed=new TextDecoder('utf-8',{fatal:false}).decode(bytes);
+            if(/[\u0400-\u04FF]/.test(fixed)) decoded=fixed;
+          }
+        } catch {}
+        // Ошибки создания TUN-адаптера показываем явно и недвусмысленно.
+        if(/Failed to find matching adapter name|create.*tun.*fail|wintun/i.test(decoded)){
+          if(/wintun\.dll/i.test(decoded) && !/Failed to find matching adapter/i.test(decoded)){
+            console.warn('[proxy] Xray не может создать TUN: отсутствует wintun.dll рядом с xray.exe. Переключите «Ядро TUN» на sing-box или повторите подключение (DLL скопируется автоматически).');
+          } else {
+            console.warn('[proxy] Не удалось создать TUN-адаптер. Проверьте, что имя TUN состоит только из латинских букв/цифр и не длиннее 31 символа (Настройки → VPN), а также что драйвер Wintun установлен.');
+          }
+          return;
+        }
+        (warn?console.warn:console.log)('[proxy]',decoded.trim());
       };
       proc.stdout?.on('data',d=>onCoreOutput(d,false));
       proc.stderr?.on('data',d=>onCoreOutput(d,true));
@@ -1017,8 +1089,8 @@ export async function start(opts={}) {
           if(!ok) console.warn('[proxy] Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым.');
         } catch {}
       } else {
-        const adapter=await waitForTunAdapter(settings.tunName||'EpicTunnel',12000);
-        if(!adapter) throw new Error(`TUN-интерфейс «${settings.tunName||'EpicTunnel'}» не перешёл в состояние Up`);
+        const adapter=await waitForTunAdapter(tunAdapterName(),12000);
+        if(!adapter) throw new Error(`TUN-интерфейс «${tunAdapterName()}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
         // Для TUN главным критерием готовности является поднятый адаптер и живой процесс.
         // Внешний curl оставляем только диагностическим, чтобы не блокировать рабочий TUN.
         ready=true;
