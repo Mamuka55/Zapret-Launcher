@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
 import { test } from 'node:test';
 const root=path.resolve(new URL('..', import.meta.url).pathname);
 
@@ -88,21 +90,14 @@ test('Core release JSON parses the requestText response body, not the wrapper ob
   assert.match(proxy,/typeof raw === 'string' \? JSON\.parse\(raw\) : raw/);
 });
 
-test('VPN status becomes connected only after a real end-to-end check through the tunnel',()=>{
+test('VPN fast connect marks ready after local transport comes up; strict mode keeps end-to-end checks',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/ready:\s*false/);
-  assert.match(proxy,/waitForTcpListening\(settings\.httpPort,6000\)/);
-  assert.match(proxy,/waitForTunAdapter\(adapterName,12000\)/);
-  // Реальная проверка туннеля обязательна: без неё UI врал «работает»,
-  // а реальный IP не менялся.
-  assert.match(proxy,/const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,5000\)/);
-  assert.match(proxy,/const check=await verifyTunOutbound\(15000,core\)/);
-  assert.match(proxy,/if\(!check\.ok\)/);
-  assert.match(proxy,/Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет/);
-  assert.match(proxy,/Проверка VPN не пройдена: Windows не направил тестовый IPv4 через TUN или TUN не вернул HTTP-ответ/);
-  assert.doesNotMatch(proxy,/Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым/);
-  assert.doesNotMatch(proxy,/Внешняя проверка TUN не прошла; TUN остаётся подключённым/);
-  assert.doesNotMatch(proxy,/if\(!runtime\.trafficSeen\) throw new Error/);
+  assert.match(proxy,/waitForTcpListening\(settings\.httpPort,fastConnect \? 1500 : 6000\)/);
+  assert.match(proxy,/waitForTunAdapter\(adapterName,fastConnect \? 8000 : 12000\)/);
+  assert.match(proxy,/if\(!fastConnect\)\{[\s\S]*verifyOutboundViaHttpProxy\(settings\.httpPort,5000\)/);
+  assert.match(proxy,/if\(!fastConnect\)\{[\s\S]*verifyTunOutbound\(15000,core\)/);
+  assert.match(proxy,/startHealthMonitor\(\)/);
   assert.match(proxy,/running:\!\!runtime\.proc && runtime\.ready===true/);
 });
 
@@ -222,19 +217,19 @@ test('sing-box 1.14+ uses current route actions and no removed sniff fields',()=
   assert.doesNotMatch(proxy,/outbound_tag:/);
 });
 
-test('System-proxy mode applies Windows proxy before remote readiness check and uses curl for the probe',()=>{
+test('System-proxy mode applies Windows proxy before strict remote readiness check',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   const applyPos=proxy.indexOf("if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }");
-  const checkPos=proxy.indexOf("const check=await verifyOutboundViaHttpProxy(settings.httpPort,5000)",applyPos);
+  const checkPos=proxy.search(/if\(!fastConnect\)\{[\s\S]*const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,5000\)/);
   assert.ok(applyPos>=0 && checkPos>applyPos);
   assert.match(proxy,/async function verifyOutboundViaHttpProxy\(port, timeoutMs=12000\)/);
   assert.match(proxy,/execFileAsync\('curl\.exe'/);
   assert.match(proxy,/'http:\/\/example\.com\/'/);
 });
 
-test('VPN verification diagnoses local ports before stopping the core',()=>{
+test('Strict VPN verification diagnoses local ports before stopping the core',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
-  const verifyPos=proxy.indexOf("const check=await verifyOutboundViaHttpProxy(settings.httpPort,5000)");
+  const verifyPos=proxy.search(/const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,5000\)/);
   const detailPos=proxy.indexOf('const detail=await describeVerifyFailure()', verifyPos);
   const killPos=proxy.indexOf('proc.kill()', detailPos);
   assert.ok(verifyPos>=0 && detailPos>verifyPos && killPos>detailPos);
@@ -320,12 +315,13 @@ test('sing-box TUN readiness does not require Xray-specific /1 routes',()=>{
 });
 
 
-test('VPN startup proxy readiness uses one fast critical endpoint and shorter timeout',()=>{
+test('VPN startup proxy readiness is non-blocking in fast mode',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
-  assert.match(proxy,/verifyOutboundViaHttpProxy\(settings\.httpPort,5000\)/);
-  assert.match(proxy,/const targets = \[\{url:'http:\/\/example\.com\/', kind:'status'\}\]/);
-  assert.match(proxy,/WinINet system proxy probe: deferred to background health monitor/);
+  assert.match(proxy,/if\(!fastConnect\)\{[\s\S]*const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,5000\)/);
+  assert.match(proxy,/const listening=await waitForTcpListening\(settings\.httpPort,fastConnect \? 1500 : 6000\)/);
+  assert.match(proxy,/startHealthMonitor\(\)/);
 });
+
 
 test('parallel VPN ping workers defer persistence until aggregate completion',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
@@ -364,4 +360,65 @@ test('VPN controls use redesigned action buttons and SVG collapse controls',()=>
   assert.match(html,/section-collapse-btn[^>]*aria-label="Свернуть\/развернуть"/);
   assert.match(css,/\.icon-btn\.action-btn/);
   assert.match(css,/\.section-collapse-btn svg/);
+});
+
+test('Encrypted VPN subscription schemes are accepted by backend and renderer',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  const app=fs.readFileSync(path.join(root,'src/renderer/app.js'),'utf8');
+  const html=fs.readFileSync(path.join(root,'src/renderer/index.html'),'utf8');
+  assert.match(proxy,/isEncryptedSubscriptionLink\(input\.trim\(\)\)/);
+  assert.match(proxy,/resolveEncryptedSubscription\(sourceUrl\)/);
+  assert.match(proxy,/userAgent: resolved\.userAgent \|\| ''/);
+  assert.ok(app.includes(String.raw`incy:\/\/`));
+  assert.ok(app.includes(String.raw`happ:\/\/`));
+  assert.ok(app.includes(String.raw`add\/https?:\/\/`));
+  assert.ok(app.includes('incy://crypt1/'));
+  assert.ok(app.includes('happ://crypt3/'));
+  assert.ok(app.includes('v2raytun://crypt/'));
+  assert.match(html,/Вставьте ссылку VPN-подписки и нажмите Enter.*INCY add\/crypt1.*HAPP add\/crypt3.*v2rayTun crypt/);
+});
+
+
+
+test('INCY crypt1 sample decrypts to its embedded HTTPS subscription',async()=>{
+  const { decryptIncyCrypt1 }=await import('../src/main/encrypted-sub-links.js');
+  const link='incy://crypt1/-zRgE53sWjOIHf3gGj_AhHrccRgQ6oKmErdmUdwsNeHdrGt5YJDUSfrnie8gPRZbtUcnU6UcaVkqj_UbqECAMgIFyqgkbtKrlS58VXKBIm81Eb2CPGQhPYnQ_DBSc3OuGgWXITiIOLo';
+  assert.deepEqual(decryptIncyCrypt1(link),{url:'https://sub.shadow-net.site/71BQowojeUp8_tuu',name:'Shadownet',sourceType:'incy://crypt1',userAgent:'INCY/Windows'});
+});
+
+test('Fast VPN connect avoids subscription refresh when a cached server is selected',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/Fast reconnect: a previously downloaded server is enough to start/);
+  assert.match(proxy,/const fastConnect = opts\.fast !== false;/);
+  assert.match(proxy,/return start\(\{mode:settings\.mode, fast:true\}\);/);
+});
+
+
+test('INCY/HAPP add wrappers are accepted as plain subscription URLs',async()=>{
+  const { resolveEncryptedSubscription }=await import('../src/main/encrypted-sub-links.js');
+  assert.deepEqual(await resolveEncryptedSubscription('incy://add/https://auth.monalis.ru/profile/6fde80a5-bcfe-4bf5-b910-89f4b7b5af3c'),{url:'https://auth.monalis.ru/profile/6fde80a5-bcfe-4bf5-b910-89f4b7b5af3c',name:'',sourceType:'incy://add',userAgent:'INCY/Windows'});
+  assert.deepEqual(await resolveEncryptedSubscription('happ://add/https://auth.monalis.ru/profile/6fde80a5-bcfe-4bf5-b910-89f4b7b5af3c'),{url:'https://auth.monalis.ru/profile/6fde80a5-bcfe-4bf5-b910-89f4b7b5af3c',name:'',sourceType:'happ://add',userAgent:'Happ/3.26.1'});
+});
+
+test('Fast VPN connect skips duplicate pre-flight and remote readiness checks',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/if\(!fastConnect\) await validateCore\(exe,configPath\)/);
+  assert.match(proxy,/if\(!fastConnect\)\{\n          const check=await verifyOutboundViaHttpProxy/);
+  assert.match(proxy,/if\(!fastConnect\)\{\n          const check=await verifyTunOutbound/);
+});
+
+test('HAPP crypt3 and v2rayTun crypt loaders support the published key layout',async()=>{
+  const mod=await import('../src/main/encrypted-sub-links.js');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zl-crypto-'));
+  const cache=path.join(dir,'keys.json');
+  try {
+    const happ=crypto.generateKeyPairSync('rsa',{modulusLength:4096,publicKeyEncoding:{format:'der',type:'pkcs1'},privateKeyEncoding:{format:'der',type:'pkcs1'}});
+    const v2=crypto.generateKeyPairSync('rsa',{modulusLength:4096,publicKeyEncoding:{format:'der',type:'pkcs1'},privateKeyEncoding:{format:'der',type:'pkcs8'}});
+    fs.writeFileSync(cache,JSON.stringify({happCrypt3:happ.privateKey.toString('base64'),v2Crypt3:v2.privateKey.toString('base64')}));
+    mod.configureEncryptedLinkKeyCache(cache);
+    const happCipher=crypto.publicEncrypt({key:happ.publicKey,format:'der',type:'pkcs1',padding:crypto.constants.RSA_PKCS1_PADDING},Buffer.from('https://example.com/happ')).toString('base64');
+    const v2Cipher=crypto.publicEncrypt({key:v2.publicKey,format:'der',type:'pkcs1',padding:crypto.constants.RSA_PKCS1_PADDING},Buffer.from('https://example.com/v2')).toString('base64');
+    assert.deepEqual(await mod.decryptHappCrypt3(`happ://crypt3/${happCipher}`),{url:'https://example.com/happ',name:'',sourceType:'happ://crypt3',userAgent:'Happ/3.26.1'});
+    assert.deepEqual(await mod.decryptV2RayTunCrypt(`v2raytun://crypt/${v2Cipher}`),{url:'https://example.com/v2',name:'',sourceType:'v2raytun://crypt',userAgent:'v2raytun/5.24.76 Windows/10.0'});
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });

@@ -15,6 +15,7 @@ import { execFile } from 'node:child_process';
 import dns from 'node:dns';
 import { promisify } from 'node:util';
 import zlib from 'node:zlib';
+import { configureEncryptedLinkKeyCache, isEncryptedSubscriptionLink, resolveEncryptedSubscription } from './encrypted-sub-links.js';
 
 const execFileAsync = promisify(execFile);
 // В тестовой среде Electron недоступен — используем ZAPRET_TEST_DATA_DIR.
@@ -90,6 +91,7 @@ function idFor(seed) { return crypto.createHash('sha1').update(seed).digest('hex
 
 function init() {
   ensureDirs();
+  configureEncryptedLinkKeyCache(path.join(DATA_DIR(), 'encrypted-link-keys.json'));
   const rawSettings = readJson(path.join(DATA_DIR(), 'settings.json'), {}) || {};
   settings = { ...DEFAULTS, ...rawSettings };
   // System proxy is the default connection mode. On upgrade from versions that
@@ -427,7 +429,7 @@ function convertSingboxOutbounds(outbounds) {
 
 export function addServer(input) {
   if (!settings) init();
-  if (typeof input === 'string' && /^https?:\/\//i.test(input.trim())) return addSubscription(input.trim(), '');
+  if (typeof input === 'string' && (/^https?:\/\//i.test(input.trim()) || isEncryptedSubscriptionLink(input.trim()))) return addSubscription(input.trim(), '');
   let parsed;
   if (typeof input === 'string') parsed = parseShareLink(input);
   else if (input?.protocol) parsed = { kind: 'server', server: normalizeServer(input) };
@@ -468,7 +470,7 @@ export async function toggleServer(id) {
   if(runtime.proc) await stop();
   settings.activeServerId=id;
   save(); emit();
-  return start({mode:settings.mode});
+  return start({mode:settings.mode, fast:true});
 }
 export function toggleFavoriteServer(id) {
   id = normalizeEntityId(id);
@@ -764,8 +766,19 @@ async function fetchSubscription(url, preferredUserAgent='') {
 
 export async function addSubscription(url, name = '') {
   if (!settings) init();
-  const id = idFor(`sub:${url}`);
-  const sub = { id, name: subscriptionDisplayName(url, name), url, createdAt: Date.now(), updatedAt: 0, count: 0, error: null };
+  const sourceUrl = String(url || '').trim();
+  const resolved = await resolveEncryptedSubscription(sourceUrl);
+  const canonicalUrl = resolved.url;
+  const id = idFor(`sub:${canonicalUrl}`);
+  const sub = {
+    id,
+    name: subscriptionDisplayName(canonicalUrl, name || resolved.name),
+    url: canonicalUrl,
+    sourceUrl,
+    sourceType: resolved.sourceType || 'http',
+    userAgent: resolved.userAgent || '',
+    createdAt: Date.now(), updatedAt: 0, count: 0, error: null
+  };
   const old = subscriptions.findIndex(x=>x.id===id);
   if (old>=0) subscriptions[old] = { ...subscriptions[old], ...sub }; else subscriptions.push(sub);
   save();
@@ -1988,15 +2001,21 @@ export async function start(opts={}) {
   startPromise=(async()=>{
     let proc=null;
     try {
+      // Fast reconnect: a previously downloaded server is enough to start.
+      // Do not refresh every subscription on every connect; explicit refresh
+      // remains available from the VPN section. Only the first-ever connect
+      // (when no server exists at all) needs a synchronous subscription fetch.
       let server=servers.find(s=>s.id===settings.activeServerId);
+      if(!server) server=servers.find(s=>s.favorite) || servers[0];
       if(!server && subscriptions.length) {
         await refreshAllSubscriptions();
         server=servers.find(s=>s.id===settings.activeServerId) || servers.find(s=>s.favorite) || servers[0];
         if(server) settings.activeServerId=server.id;
       }
-      if(!server) { server=servers.find(s=>s.favorite) || servers[0]; if(server) settings.activeServerId=server.id; }
       if(!server) throw new Error('Сначала добавьте VPN-сервер или подписку');
+      if(settings.activeServerId !== server.id) { settings.activeServerId=server.id; save(); emit(); }
       const mode=opts.mode || settings.mode || 'proxy';
+      const fastConnect = opts.fast !== false;
       normalizeTunSettings(settings);
       let core = isTunMode(mode) && settings.tunCore ? settings.tunCore : server.core;
       if(core==='auto') core=['hysteria2','wireguard'].includes(server.protocol)?'sing-box':'xray';
@@ -2026,7 +2045,9 @@ export async function start(opts={}) {
       }
       const cfg=core==='sing-box'?await buildSingboxConfig(server,mode):finalizeXrayConfig(buildXrayConfig(server,mode),server);
       const configPath=path.join(CFG_DIR(),`active-${core}.json`); fs.writeFileSync(configPath,JSON.stringify(cfg,null,2),'utf8');
-      await validateCore(exe,configPath);
+      // In fast-connect mode the core itself validates the config on startup;
+      // launching a second validator process only adds startup latency.
+      if(!fastConnect) await validateCore(exe,configPath);
       runtime.core=core; runtime.mode=mode; runtime.configPath=configPath; runtime.ready=false; runtime.trafficSeen=false; runtime.logTail=[];
       proc=spawn(exe,['run','-c',configPath],{cwd:path.dirname(exe),windowsHide:true,stdio:['ignore','pipe','pipe']});
       runtime.proc=proc;
@@ -2064,27 +2085,26 @@ export async function start(opts={}) {
 
       let ready=false;
       if(!isTunMode(mode)) {
-        const listening=await waitForTcpListening(settings.httpPort,6000);
+        // Fast mode only waits for the local proxy listener. Remote reachability
+        // is checked by the background health monitor after we mark the VPN ready.
+        const listening=await waitForTcpListening(settings.httpPort,fastConnect ? 1500 : 6000);
         if(!listening) throw new Error(`VPN-ядро запущено, но локальный HTTP-порт ${settings.httpPort} не открылся`);
-        // Apply the Windows system proxy BEFORE the remote readiness check.
-        // Otherwise a slow remote handshake could fail first and the code would
-        // kill Xray before the browser ever receives a usable system proxy.
         if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }
-        const check=await verifyOutboundViaHttpProxy(settings.httpPort,5000);
-        if(!check.ok){
-          // Диагностируем до остановки процесса: после kill локальные порты закономерно
-          // закрыты, поэтому старый порядок всегда выдавал ложное «локальные порты не отвечают».
-          const detail=await describeVerifyFailure();
-          const recent=Array.isArray(runtime.logTail)?runtime.logTail.slice(-8).join(' | '):'';
-          const serverHint=` Сервер: ${server.address}:${server.port}, протокол ${server.protocol}, сеть ${server.network||'tcp'}, security ${server.security||'none'}${server.sni?`, SNI ${server.sni}`:''}.`;
-          try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
-          throw new Error(detail + serverHint + (recent ? ` Последние сообщения Xray: ${recent}` : ''));
+        if(!fastConnect){
+          const check=await verifyOutboundViaHttpProxy(settings.httpPort,5000);
+          if(!check.ok){
+            const detail=await describeVerifyFailure();
+            const recent=Array.isArray(runtime.logTail)?runtime.logTail.slice(-8).join(' | '):'';
+            const serverHint=` Сервер: ${server.address}:${server.port}, протокол ${server.protocol}, сеть ${server.network||'tcp'}, security ${server.security||'none'}${server.sni?`, SNI ${server.sni}`:''}.`;
+            try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
+            throw new Error(detail + serverHint + (recent ? ` Последние сообщения Xray: ${recent}` : ''));
+          }
+          runtime.publicIp=check.ip;
         }
-        runtime.publicIp=check.ip;
         ready=true;
       } else {
         const adapterName=tunAdapterName();
-        const adapter=await waitForTunAdapter(adapterName,12000);
+        const adapter=await waitForTunAdapter(adapterName,fastConnect ? 8000 : 12000);
         if(!adapter) throw new Error(`TUN-интерфейс «${adapterName}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
         if(isTunMode(mode) && core==='xray'){
           if(!adapter.index) throw new Error(`Не удалось определить индекс TUN-интерфейса «${adapterName}»`);
@@ -2093,20 +2113,20 @@ export async function start(opts={}) {
           if(!routes.ok) throw new Error(`Не удалось установить IPv4-маршруты TUN: ${routes.error||'неизвестная ошибка'}`);
           console.log('[proxy] Installed Windows TUN IPv4 routes on interface',adapter.index, routes.routes.join(', '));
         }
-        // Адаптер поднят и, для Xray, маршруты явно привязаны к точному интерфейсу —
-        // теперь проверяем, что Windows выбирает этот интерфейс для внешнего IPv4.
-        // Обязательная проверка: без неё UI показывал бы «подключено», а реальный
-        // IP не менялся бы (адаптер есть, до сервера связи нет).
-        const check=await verifyTunOutbound(15000,core);
-        if(!check.ok){
-          const route=await tunRouteDiagnostics(3000,runtime.tunIfIndex||null);
-          const recent=Array.isArray(runtime.logTail)?runtime.logTail.slice(-8).join(' | '):'';
-          await cleanupWindowsTunRoutes(runtime.tunIfIndex||route.index||null);
-          try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
-          const routeHint=route.ok ? ` IPv4-маршруты TUN (/1+/1): ${route.halfRoutes?'найдены':'не найдены'}${route.index!==null?`, индекс ${route.index}`:''}.` : ` Не удалось определить IPv4-маршруты TUN: ${route.error||'неизвестная ошибка'}.`;
-          throw new Error('Проверка VPN не пройдена: Windows не направил тестовый IPv4 через TUN или TUN не вернул HTTP-ответ.' + routeHint + (recent ? ` Последние сообщения Xray: ${recent}` : ''));
+        // Fast mode does not wait for an external HTTP probe after TUN setup.
+        // The background health monitor will verify real reachability after start.
+        if(!fastConnect){
+          const check=await verifyTunOutbound(15000,core);
+          if(!check.ok){
+            const route=await tunRouteDiagnostics(3000,runtime.tunIfIndex||null);
+            const recent=Array.isArray(runtime.logTail)?runtime.logTail.slice(-8).join(' | '):'';
+            await cleanupWindowsTunRoutes(runtime.tunIfIndex||route.index||null);
+            try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
+            const routeHint=route.ok ? ` IPv4-маршруты TUN (/1+/1): ${route.halfRoutes?'найдены':'не найдены'}${route.index!==null?`, индекс ${route.index}`:''}.` : ` Не удалось определить IPv4-маршруты TUN: ${route.error||'неизвестная ошибка'}.`;
+            throw new Error('Проверка VPN не пройдена: Windows не направил тестовый IPv4 через TUN или TUN не вернул HTTP-ответ.' + routeHint + (recent ? ` Последние сообщения Xray: ${recent}` : ''));
+          }
+          runtime.publicIp=check.ip;
         }
-        runtime.publicIp=check.ip;
         if(mode==='mixed') {
           settings.systemProxy=true;
           await setWindowsSystemProxy(true);
