@@ -88,15 +88,37 @@ test('Core release JSON parses the requestText response body, not the wrapper ob
   assert.match(proxy,/typeof raw === 'string' \? JSON\.parse\(raw\) : raw/);
 });
 
-test('VPN status becomes connected after local proxy/TUN readiness; external check is best-effort',()=>{
+test('VPN status becomes connected only after a real end-to-end check through the tunnel',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/ready:\s*false/);
   assert.match(proxy,/waitForTcpListening\(settings\.httpPort,12000\)/);
-  assert.match(proxy,/waitForTunAdapter\(settings\.tunName\|\|'EpicTunnel',12000\)/);
-  assert.match(proxy,/Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым/);
-  assert.match(proxy,/Внешняя проверка TUN не прошла; TUN остаётся подключённым/);
+  assert.match(proxy,/waitForTunAdapter\(adapterName,12000\)/);
+  // Реальная проверка туннеля обязательна: без неё UI врал «работает»,
+  // а реальный IP не менялся.
+  assert.match(proxy,/const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,15000\)/);
+  assert.match(proxy,/const check=await verifyTunOutbound\(15000\)/);
+  assert.match(proxy,/if\(!check\.ok\)/);
+  assert.match(proxy,/Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет/);
+  assert.match(proxy,/Проверка VPN не пройдена: TUN-интерфейс поднят, но выход в интернет через него не работает/);
+  assert.doesNotMatch(proxy,/Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым/);
+  assert.doesNotMatch(proxy,/Внешняя проверка TUN не прошла; TUN остаётся подключённым/);
   assert.doesNotMatch(proxy,/if\(!runtime\.trafficSeen\) throw new Error/);
   assert.match(proxy,/running:\!\!runtime\.proc && runtime\.ready===true/);
+});
+
+test('Xray config contains non-empty outbounds array (empty object meant no proxy outbound => fake "working" VPN)',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.doesNotMatch(proxy,/outbounds\s*:\s*\{\}/);
+  assert.match(proxy,/inbounds,outbounds,routing:route\.routing/);
+});
+
+test('VPN health monitor disconnects when tunnel stops carrying traffic',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/function startHealthMonitor\(\)/);
+  assert.match(proxy,/consecutiveHealthFails>=3/);
+  assert.match(proxy,/if\(ready\) startHealthMonitor\(\)/);
+  assert.match(proxy,/stopHealthMonitor\(\);\n  const proc=runtime\.proc/);
+  assert.match(proxy,/publicIp:runtime\.publicIp\|\|''/);
 });
 
 test('VPN tiles do not move on hover or click',()=>{
@@ -120,4 +142,38 @@ test('Technical subscription/server domains are converted into user-facing names
   assert.match(proxy,/known = \{ guava:'Guava'/);
   assert.match(proxy,/countryFromHost\(address\)/);
   assert.match(app,/Не показываем технический домен/);
+});
+
+test('TUN fixes: adapter name normalized, tunCore singbox alias mapped, wintun prepared for Xray',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/function normalizeTunName\(name\)/);
+  assert.match(proxy,/interface_name:tunAdapterName\(\)/);
+  assert.match(proxy,/name:tunAdapterName\(\)/);
+  assert.match(proxy,/s\.tunCore === 'singbox' \|\| s\.tunCore === 'sing_box'\) s\.tunCore = 'sing-box'/);
+  assert.match(proxy,/await ensureXrayWintunDll\(exe\)/);
+  assert.doesNotMatch(proxy,/tunCore: 'singbox'/);
+  const app=fs.readFileSync(path.join(root,'src/renderer/app.js'),'utf8');
+  assert.doesNotMatch(app,/tunCore:[^,]*\|\|\s*'singbox'/);
+});
+
+test('Core log mojibake (CP866-as-UTF8) is decoded and TUN errors get a readable message',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  // Логи ядер приходят как UTF-8, отображённый в CP866 (символы ╨..╤ из U+2500-U+2513).
+  // Декодирование: восстановление байтов + TextDecoder('utf-8').
+  assert.match(proxy,/Buffer\.from\(\s*\w+\s*,\s*'binary'\s*\)/);
+  assert.match(proxy,/new TextDecoder\('utf-8'/);
+  assert.match(proxy,/\\u2500-\\u2513/);
+  assert.match(proxy,/Failed to find matching adapter name/);
+  assert.match(proxy,/Не удалось создать TUN-адаптер/);
+});
+
+test('validateCore uses correct CLI flags per core (sing-box: check -c, xray: -test -config)',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  // sing-box не поддерживает `run -test` / `-t` — только `check -c`
+  assert.match(proxy,/async function validateCore\(exe, configPath\)/);
+  assert.match(proxy,/path\.basename\(exe\)\.toLowerCase\(\)/);
+  assert.match(proxy,/\['check',\s*'-c',\s*configPath\]/);
+  // xray проверяется без подкоманды run
+  assert.match(proxy,/\['-test',\s*'-config',\s*configPath\]/);
+  assert.doesNotMatch(proxy,/exe,\s*\[\s*'run',\s*'-test'/);
 });

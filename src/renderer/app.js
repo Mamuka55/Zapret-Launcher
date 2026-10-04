@@ -606,6 +606,8 @@ function renderProxyState(p = state.proxy) {
   const px=p||state.proxy||{}; state.proxy={...state.proxy,...px}; const selected=px.selected||(px.servers||[]).find(s=>s.id===px.settings?.activeServerId); const running=!!px.running; const lat=selected?.latency!=null?`${selected.latency} ms`:'—';
   const statusText=running?(px.mode==='tun'?'TUN подключён':'Прокси подключён'):'Остановлен';
   ['#vpnSectionStatus','#proxyQuickStatus','#proxySettingsStatus'].forEach(sel=>{const el=$(sel);if(el){el.textContent=statusText;el.classList.toggle('on',running);}});
+  // Показываем IP, полученный через туннель, — доказательство, что VPN реально работает.
+  const ipEl=$('#proxyHeroIp'); if(ipEl) ipEl.textContent = running && px.publicIp ? `IP через VPN: ${px.publicIp}` : '';
   ['#proxyQuickSelected','#proxyHeroServer'].forEach(sel=>{const el=$(sel);if(el)el.textContent=selected?.name||'Сервер не выбран';});
   ['#proxyQuickLatency','#proxyHeroLatency'].forEach(sel=>{const el=$(sel);if(el)el.textContent=lat;});
   const meta=$('#proxyHeroMeta'); if(meta)meta.textContent=selected?`${proxyServerLabel(selected)} · ${px.mode==='tun'?'TUN':'системный прокси'}`:'Добавьте подписку или сервер в категории VPN.';
@@ -641,7 +643,7 @@ function syncProxySettings(){
     httpPort:Number($('#proxyHttpPort')?.value||10809),
     systemProxy:!!$('#proxySystemProxy')?.checked,
     mtu:Number($('#proxyMtu')?.value||1500),
-    tunCore:$('#proxyTunCore')?.value || 'singbox',
+    tunCore:$('#proxyTunCore')?.value || 'sing-box',
     tunName:($('#proxyTunName')?.value||'EpicTunnel').trim() || 'EpicTunnel',
     socksAuthMode:$('#proxySocksAuthMode')?.value || 'disable',
     httpAuthMode:$('#proxyHttpAuthMode')?.value || 'disable',

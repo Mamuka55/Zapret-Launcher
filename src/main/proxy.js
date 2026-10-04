@@ -1,3 +1,7 @@
+// Тестуемость: при импорте вне Electron (NODE_ENV=test) пути к данным берутся из
+// переменной окружения, а не из app.getPath('userData') — иначе модуль нельзя
+// проверить в юнит-тестах генерации конфигов.
+const IS_TEST = process.env.NODE_ENV === 'test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -6,13 +10,16 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Socket } from 'node:net';
-import { app } from 'electron';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import zlib from 'node:zlib';
 
 const execFileAsync = promisify(execFile);
-const DATA_DIR = () => path.join(app.getPath('userData'), 'proxy');
+// В тестовой среде Electron недоступен — используем ZAPRET_TEST_DATA_DIR.
+let appMod = null;
+if (!IS_TEST) ({ app: appMod } = await import('electron'));
+const userDataDir = () => IS_TEST ? (process.env.ZAPRET_TEST_DATA_DIR || path.join(os.tmpdir(), 'zapret-test')) : appMod.getPath('userData');
+const DATA_DIR = () => path.join(userDataDir(), 'proxy');
 const SERVERS_FILE = () => path.join(DATA_DIR(), 'servers.json');
 const SUBS_FILE = () => path.join(DATA_DIR(), 'subscriptions.json');
 const ROUTES_FILE = () => path.join(DATA_DIR(), 'routes.json');
@@ -54,7 +61,7 @@ const DEFAULTS = {
   httpAuthMode: 'disable',
   httpAuthUser: '',
   httpAuthPassword: '',
-  tunCore: 'singbox'
+  tunCore: 'sing-box'
 };
 
 let runtime = { proc: null, core: null, mode: 'proxy', configPath: null, systemProxyChanged: false, ready: false, trafficSeen: false };
@@ -82,6 +89,7 @@ function idFor(seed) { return crypto.createHash('sha1').update(seed).digest('hex
 function init() {
   ensureDirs();
   settings = { ...DEFAULTS, ...(readJson(path.join(DATA_DIR(), 'settings.json'), {}) || {}) };
+  normalizeTunSettings(settings);
   servers = Array.isArray(readJson(SERVERS_FILE(), [])) ? readJson(SERVERS_FILE(), []) : [];
   // Удаляем старые служебные/заглушечные VLESS-записи вида 0.0.0.0:1.
   servers = servers.filter(s => !isPlaceholderServer(s));
@@ -110,6 +118,7 @@ export function getSettings() { if (!settings) init(); return structuredClone(se
 export function setSettings(patch = {}) {
   if (!settings) init();
   settings = { ...settings, ...patch };
+  normalizeTunSettings(settings);
   save();
   return getSettings();
 }
@@ -437,7 +446,7 @@ export function toggleFavoriteServer(id) {
 
 
 function localDeviceId() {
-  const seed = [process.platform, process.arch, os.hostname(), app.getPath('userData')].join('|');
+  const seed = [process.platform, process.arch, os.hostname(), userDataDir()].join('|');
   return crypto.createHash('sha256').update(seed).digest('hex');
 }
 function subscriptionRequestHeaders(ua, extra={}) {
@@ -807,25 +816,82 @@ function routeForConfig(routeProfile) {
     if (r.direct?.length) rules.push({domain:r.direct,outboundTag:'direct'});
     if (r.domains?.length) rules.push({domain:r.domains,outboundTag:'proxy'});
   }
-  return { routing:{domainStrategy:'IPIfNonMatch',rules} };
+  // final:'proxy' обязателен: без него весь остальной трафик шёл бы напрямую,
+  // и при «Глобальном» профиле реальный IP не менялся бы.
+  return { routing:{domainStrategy:'IPIfNonMatch', final:'proxy', rules} };
+}
+
+// Те же правила в формате sing-box (route.rules + route.final).
+function singboxRouteRules() {
+  const r=routes.find(x=>x.id===settings.routeProfile) || routes[0];
+  const rules=[];
+  if (r?.mode==='split') {
+    if (r.block?.length) rules.push({domain:r.block, outbound_tag:'block'});
+    if (r.direct?.length) rules.push({domain:r.direct, outbound_tag:'direct'});
+    if (r.domains?.length) rules.push({domain:r.domains, outbound_tag:'proxy'});
+  }
+  return rules;
+}
+
+// Имя TUN-адаптера должно соответствовать требованиям Windows (Wintun/tun2socks):
+// только латиница/цифры/-/_ , длина до 31 символа. Пользовательское значение
+// («Имя TUN» в настройках) нормализуется, иначе ядро падает с
+// "Failed to find matching adapter name: Элемент не найден. (Code 0x00000490)".
+function normalizeTunName(name) {
+  const cleaned = String(name || '').trim().replace(/[^A-Za-z0-9\-_ ]/g, '').replace(/\s+/g, '-').replace(/^[-_]+|[-_]+$/g, '').slice(0, 31);
+  return cleaned || 'Zapret';
+}
+function tunAdapterName() { return normalizeTunName(settings?.tunName || DEFAULTS.tunName); }
+
+function normalizeTunSettings(s) {
+  if (!s) return;
+  s.tunName = normalizeTunName(s.tunName);
+  // «singbox» из старых версий настроек — недопустимое значение ядра: приводим к «sing-box».
+  if (s.tunCore === 'singbox' || s.tunCore === 'sing_box') s.tunCore = 'sing-box';
+  if (!['sing-box', 'xray'].includes(s.tunCore)) s.tunCore = DEFAULTS.tunCore;
+}
+
+// Xray ищет wintun.dll рядом с xray.exe (или в System32). Без неё режим TUN на
+// свежем Xray не поднимает интерфейс — копируем DLL из каталога sing-box при необходимости.
+async function ensureXrayWintunDll(xrayExePath) {
+  try {
+    const dir = path.dirname(xrayExePath);
+    const dst = path.join(dir, 'wintun.dll');
+    if (fs.existsSync(dst)) return true;
+    const found = findExe(CORES_DIR(), 'wintun.dll');
+    if (found) { fs.copyFileSync(found, dst); console.log('[proxy] wintun.dll скопирована в каталог Xray для режима TUN'); return true; }
+    const sys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wintun.dll');
+    if (fs.existsSync(sys)) { fs.copyFileSync(sys, dst); return true; }
+    console.warn('[proxy] wintun.dll не найдена: режим TUN на ядре Xray может быть недоступен (используйте ядро sing-box)');
+  } catch (e) { console.warn('[proxy] Не удалось подготовить wintun.dll:', e?.message || e); }
+  return false;
 }
 
 function buildXrayConfig(server, mode='proxy') {
   const route=routeForConfig(settings.routeProfile);
-  const inbounds= mode==='tun' ? [{tag:'tun-in',port:0,protocol:'tun',settings:{name:settings.tunName||'EpicTunnel',desc:'Wintun',mtu:Number(settings.mtu||1500),gateway:['198.18.0.1/15','fdfe:dcba:9876::1/126'],dns:settings.dns||['1.1.1.1','8.8.8.8'],autoSystemRoutingTable:['0.0.0.0/0','::/0'],autoSystemDns:false,autoOutboundsInterface:null}}] : [{tag:'socks-in',listen:'127.0.0.1',port:Number(settings.socksPort||10808),protocol:'socks',settings:{udp:true,accounts:settings.socksAuthMode==='manual'&&settings.socksAuthUser?[{user:settings.socksAuthUser,pass:settings.socksAuthPassword||''}]:undefined},sniffing:{enabled:true,destOverride:['http','tls','quic']}},{tag:'http-in',listen:'127.0.0.1',port:Number(settings.httpPort||10809),protocol:'http',settings:{accounts:settings.httpAuthMode==='manual'&&settings.httpAuthUser?[{user:settings.httpAuthUser,pass:settings.httpAuthPassword||''}]:undefined}}];
+  const inbounds= mode==='tun' ? [{tag:'tun-in',port:0,protocol:'tun',settings:{name:tunAdapterName(),mtu:Number(settings.mtu||1500),gateway:['198.18.0.1/15','fdfe:dcba:9876::1/126'],address:['198.18.0.1/15','fdfe:dcba:9876::1/126'],dns:settings.dns||['1.1.1.1','8.8.8.8'],poolSize:2,onDropped:'bypass'}}] : [{tag:'socks-in',listen:'127.0.0.1',port:Number(settings.socksPort||10808),protocol:'socks',settings:{udp:true,accounts:settings.socksAuthMode==='manual'&&settings.socksAuthUser?[{user:settings.socksAuthUser,pass:settings.socksAuthPassword||''}]:undefined},sniffing:{enabled:true,destOverride:['http','tls','quic']}},{tag:'http-in',listen:'127.0.0.1',port:Number(settings.httpPort||10809),protocol:'http',settings:{accounts:settings.httpAuthMode==='manual'&&settings.httpAuthUser?[{user:settings.httpAuthUser,pass:settings.httpAuthPassword||''}]:undefined}}];
   const outbounds=[{tag:'proxy',...xrayOutbound(server)},{tag:'direct',protocol:'freedom',settings:{}},{tag:'block',protocol:'blackhole',settings:{}}];
-  return {log:{loglevel:'warning'},dns:{servers:[...(settings.dns||['1.1.1.1','8.8.8.8'])]},inbounds,outbounds:{}, routing:route.routing};
+  // ВАЖНО: поле называется `outbounds` и это массив. Ранее сюда попадал пустой объект {},
+  // из-за чего Xray запускался без outbound'а `proxy`, правила маршрутизации TUN не
+  // применялись (весь трафик шёл напрямую), а UI показывал «работает».
+  return {log:{loglevel:'warning'},dns:{servers:[...(settings.dns||['1.1.1.1','8.8.8.8'])]},inbounds,outbounds,routing:route.routing};
 }
 
-// Xray accepts outbounds as an array; kept separate to make generated config easy to inspect.
+// Xray принимает outbounds только как массив; finalize гарантирует, что в конфиге
+// всегда есть outbound `proxy` (без него трафик шёл бы напрямую, а UI — «работает»).
 function finalizeXrayConfig(cfg, server) { cfg.outbounds=[{tag:'proxy',...xrayOutbound(server)},{tag:'direct',protocol:'freedom',settings:{}},{tag:'block',protocol:'blackhole',settings:{}}]; return cfg; }
 
 function buildSingboxConfig(server, mode='tun') {
   const outbound=singboxOutbound(server);
+  const routeRules=singboxRouteRules();
   if (mode==='proxy') {
-    return {log:{level:'warn'},inbounds:[{type:'mixed',tag:'mixed-in',listen:'127.0.0.1',listen_port:Number(settings.httpPort||10809)}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{auto_detect_interface:true}};
+    return {log:{level:'warn'},inbounds:[{type:'mixed',tag:'mixed-in',listen:'127.0.0.1',listen_port:Number(settings.httpPort||10809)}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{final:'proxy',auto_detect_interface:true,rules:routeRules}};
   }
-  return {log:{level:'warn'},inbounds:[{type:'tun',tag:'tun-in',interface_name:settings.tunName||'EpicTunnel',address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:true}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{auto_detect_interface:true,auto_detect_path:true}};
+  // ВАЖНО: без route.final весь принятый TUN-ом трафик уходил НАПРЯМУЮ (в обход
+  // сервера): интерфейс поднят, «VPN работает», но реальный IP не меняется.
+  // interface_name — нормализованное имя (латиница, <=31 символ), иначе Windows
+  // отказывает в создании адаптера («Элемент не найден», Code 0x00000490).
+  return {log:{level:'warn'},inbounds:[{type:'tun',tag:'tun-in',interface_name:tunAdapterName(),address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:false,sniff:true}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{final:'proxy',auto_detect_interface:true,sniff:true,rules:routeRules}};
 }
 
 async function powerShellExpand(zip, dest) {
@@ -871,9 +937,46 @@ async function ensureCore(core) {
 }
 function findExe(root,name){if(fs.existsSync(path.join(root,name)))return path.join(root,name); for(const ent of fs.readdirSync(root,{withFileTypes:true})){if(ent.isDirectory()){const p=findExe(path.join(root,ent.name),name);if(p)return p;}}return null;}
 
+function decodeOemText(raw) {
+  // Логи ядер на Windows пишутся в OEM-кодировке (CP866) — при перенаправлении
+  // кириллица превращается в «╨Т╨╜╨╡╤И╨╜╤П...». Восстанавливаем байты и читаем как UTF-8.
+  let msg = String(raw || '');
+  try {
+    if (/[\u2500-\u257F]{2}/.test(msg)) {
+      const bytes = Uint8Array.from(Buffer.from(msg, 'binary'));
+      const fixed = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      if (/[\u0400-\u04FF]/.test(fixed)) msg = fixed;
+    }
+  } catch {}
+  return msg;
+}
+
 async function validateCore(exe, configPath) {
-  try { await execFileAsync(exe,['run','-test','-config',configPath],{windowsHide:true,timeout:25000}); return true; }
-  catch (e) { const msg=String(e?.stderr||e?.stdout||e?.message||e); throw new Error(`Проверка конфигурации не пройдена: ${msg.slice(0,1200)}`); }
+  // Флаги проверки конфигурации различаются у ядер:
+  //   xray      : `xray -test -config <файл>`        (без подкоманды run!)
+  //   sing-box  : `sing-box check -c <файл>`          (`-t`/`-test` не поддерживаются)
+  const name = path.basename(exe).toLowerCase();
+  const args = name.startsWith('sing-box')
+    ? ['check', '-c', configPath]
+    : ['-test', '-config', configPath];
+  try {
+    await execFileAsync(exe, args, { windowsHide: true, timeout: 25000 });
+    return true;
+  } catch (e) {
+    const raw = String(e?.stderr || e?.stdout || e?.message || e);
+    // Не показываем в UI «кракозябры»: байты CP866/OEM декодируем в читаемый текст.
+    const msg = decodeOemText(raw);
+    // Предупреждения о деприкации WebSocket/host не должны выглядеть как ошибка.
+    const lines = msg.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)
+      .filter(x => !/^Xray \d|A unified platform|^sing-box version|^$/.test(x))
+      // Деприкационные предупреждения (WebSocket, host в headers и т.п.) — не ошибки:
+      // конфиг рабочий, показывать их как причину сбоя проверки нельзя.
+      .filter(x => !/\[Warning\]|deprecated|migrate to|Please update your config/i.test(x));
+    const fatal = lines.filter(x => /error|fatal|failed|invalid|unknown/i.test(x));
+    if (!lines.length && !fatal.length) return true; // остались только warnings — ок
+    const detail = (fatal.length ? fatal : lines).join('\n').slice(0, 1200) || 'неизвестная ошибка';
+    throw new Error(`Проверка конфигурации не пройдена: ${detail}`);
+  }
 }
 
 async function findFreeTcpPort(startPort, reserved=new Set()) {
@@ -924,42 +1027,184 @@ async function waitForTcpListening(port, timeoutMs=12000) {
 
 async function waitForTunAdapter(name, timeoutMs=12000) {
   if(process.platform!=='win32') return true;
+  // Адаптер может называться иначе, чем запрошено (Wintun переименовывает его при
+  // пересоздании), поэтому ищем и по имени, и по описанию; кириллические символы
+  // в описании сравниваются через транслитерацию.
   const wanted=String(name||'EpicTunnel').replace(/'/g,"''");
+  const latin=latinizeName(String(name||'EpicTunnel')).replace(/'/g,"''");
   const deadline=Date.now()+timeoutMs;
   while(Date.now()<deadline){
     try {
-      const {stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`$a=Get-NetAdapter -Name '${wanted}' -ErrorAction SilentlyContinue; if($a -and $a.Status -eq 'Up'){ 'UP' }`],{windowsHide:true,timeout:2500,maxBuffer:10240});
-      if(String(stdout).trim().includes('UP')) return true;
-    } catch {}
+      const {stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-Command',
+        `$n='${wanted}';$l='${latin}';$a=@(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Wintun*' -or $_.Name -eq $n -or $_.Name -like "*$l*" }); if(($a | Where-Object { $_.Status -eq 'Up' })){ 'UP' }elseif($a.Count -gt 0){ 'DOWN' }`],{windowsHide:true,timeout:4000,maxBuffer:10240});
+      const st=String(stdout).trim();
+      if(st.includes('UP')) return true;
+      lastTunState = st==='DOWN' ? 'down' : 'none';
+    } catch { lastTunState='probe-error'; }
     await new Promise(r=>setTimeout(r,250));
   }
   return false;
 }
+let lastTunState='none';
+
+function latinizeName(s){
+  const map={а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};
+  return String(s).toLowerCase().split('').map(ch=>map[ch]!==undefined?map[ch]:ch).join('');
+}
+
+// Реальная проверка работоспособности VPN-туннеля: HTTP(S)-запрос через локальный
+// прокси к нескольким независимым endpoint'ам. Если ядро запущено, но удалённый
+// сервер недоступен (неверный ключ/порт/TLS), запросы не пройдут — и мы обязаны
+// показать «не работает», а не «работает».
+const VERIFY_ENDPOINTS = [
+  ['https://api.ip.sb/geoip', 'ip'],
+  ['https://ipinfo.io/json', 'ip'],
+  ['https://myexternalip.com/raw', null],
+  ['https://ifconfig.co/ip', null]
+];
+
+function fetchThroughProxy(url, proxyUrl, timeoutMs) {
+  return new Promise(resolve=>{
+    let settled=false; const finish=v=>{if(!settled){settled=true;resolve(v)}};
+    try {
+      const target=new URL(url);
+      const lib=target.protocol==='https:'?https:http;
+      const isSocks = /^socks/i.test(proxyUrl||'');
+      let agentOpts;
+      if (!proxyUrl) agentOpts={agent:false};
+      else if (isSocks) agentOpts={agent:new Socks5AgentCompat(proxyUrl)};
+      else agentOpts={agent:new HttpsProxyAgentCompat(proxyUrl,target.protocol==='https:')};
+      const req=lib.get(url,{
+        ...agentOpts,
+        headers:{'User-Agent':'Mozilla/5.0','Accept':'application/json, text/plain, */*'},
+        timeout:timeoutMs, family:4
+      },res=>{
+        let body=''; res.setEncoding('utf8');
+        res.on('data',c=>{body+=c; if(body.length>200000)res.destroy();});
+        res.on('end',()=>finish({status:res.statusCode||0,body}));
+      });
+      req.on('response',res=>{ if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){req.destroy();} });
+      req.on('timeout',()=>{req.destroy();finish(null)});
+      req.on('error',()=>finish(null));
+    } catch { finish(null); }
+  });
+}
+
+// Минимальный CONNECT-агент для https-запросов через http-прокси (без внешних зависимостей).
+class HttpsProxyAgentCompat {
+  constructor(proxyUrl, useConnect) {
+    const p=new URL(proxyUrl); this.host=p.hostname; this.port=Number(p.port||80); this.useConnect=!!useConnect;
+  }
+  createConnection(options, cb) {
+    const sock=new Socket(); let done=false;
+    const fail=e=>{if(!done){done=true;sock.destroy();cb(e)}};
+    sock.setTimeout(8000,()=>fail(new Error('proxy connect timeout')));
+    sock.once('error',e=>fail(e));
+    sock.connect(this.port,this.host,()=>{
+      if(!this.useConnect){ done=true; cb(null,sock); return; }
+      sock.write(`CONNECT ${options.host}:${options.port||443} HTTP/1.1\r\nHost: ${options.host}\r\n\r\n`);
+    });
+    if(this.useConnect){
+      sock.once('data',buf=>{
+        if(done)return;
+        if(/HTTP\/1\.[01] 200/.test(buf.toString('latin1').slice(0,100))){done=true;cb(null,sock);}
+        else fail(new Error('proxy CONNECT failed'));
+      });
+    }
+    return sock;
+  }
+}
+
+// SOCKS5-агент (per-connection), чтобы проверять туннель именно через локальный
+// SOCKS-порт ядра — как это делают обычные приложения при «режиме прокси».
+class Socks5AgentCompat extends http.Agent {
+  constructor(proxyUrl) { super({keepAlive:false}); const p=new URL(proxyUrl); this.host=p.hostname; this.port=Number(p.port||1080); }
+  createConnection(options, cb) {
+    const sock=new Socket(); let done=false;
+    const fail=e=>{if(!done){done=true;sock.destroy();cb(e)}};
+    sock.setTimeout(8000,()=>fail(new Error('socks connect timeout')));
+    sock.once('error',e=>fail(e));
+    const host=String(options.host||''); const port=Number(options.port||(this.useTls?443:80));
+    const sendTarget=()=>{ // CMD CONNECT, ATYP domain
+      const buf=Buffer.alloc(7+host.length);
+      buf[0]=0x05;buf[1]=0x01;buf[2]=0x00;buf[3]=0x03;buf[4]=host.length;
+      buf.write(host,5,'ascii'); buf.writeUInt16BE(port,5+host.length);
+      sock.write(buf);
+    };
+    sock.connect(this.port,this.host,()=>{ sock.write(Buffer.from([0x05,0x01,0x00])); }); // no-auth
+    let phase=0;
+    const onData=(buf)=>{
+      try{
+        if(phase===0){
+          if(buf.length<2||buf[0]!==0x05) return fail(new Error('socks bad greeting'));
+          if(buf[1]!==0x00) return fail(new Error('socks auth required'));
+          phase=1; sendTarget();
+        } else {
+          sock.removeListener('data',onData);
+          if(buf.length<10||buf[1]!==0x00) return fail(new Error('socks CONNECT refused'));
+          done=true; sock.setNoDelay(true); cb(null,sock);
+        }
+      }catch(e){ fail(e); }
+    };
+    sock.on('data',onData);
+    return sock;
+  }
+}
+
+function directRequest(url, timeoutMs) {
+  return new Promise(resolve=>{
+    let settled=false; const finish=v=>{if(!settled){settled=true;resolve(v)}};
+    try {
+      const target=new URL(url);
+      const lib=target.protocol==='https:'?https:http;
+      const req=lib.get(url,{headers:{'User-Agent':'Mozilla/5.0','Accept':'application/json, text/plain, */*'},timeout:timeoutMs,family:4},res=>{
+        let body=''; res.setEncoding('utf8');
+        res.on('data',c=>{body+=c; if(body.length>200000)res.destroy();});
+        res.on('end',()=>finish({status:res.statusCode||0,body}));
+      });
+      req.on('timeout',()=>{req.destroy();finish(null)});
+      req.on('error',()=>finish(null));
+    } catch { finish(null); }
+  });
+}
+
+async function fetchPublicIpVia(proxyUrl, timeoutMs) {
+  for (const [url, ipField] of VERIFY_ENDPOINTS) {
+    const r = proxyUrl ? await fetchThroughProxy(url, proxyUrl, Math.min(6000, timeoutMs)) : await directRequest(url, Math.min(6000, timeoutMs));
+    if (!r || r.status < 200 || r.status >= 400) continue;
+    let ip = '';
+    if (ipField) { try { ip = String(JSON.parse(r.body)?.[ipField]||'').trim(); } catch { ip = ''; } }
+    else ip = String(r.body||'').trim().split('\n')[0];
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) || /^[0-9a-f:]+$/i.test(ip)) return { ok:true, ip, via:url };
+  }
+  return { ok:false, ip:'', via:'' };
+}
+
+async function probeVpnEndpoints(proxyUrl, timeoutMs) {
+  // Прокси в формате socks5:// принимается и через SOCKS5, и через HTTP-порт ядра
+  // (Xray/sing-box слушают на одном порту mixed-протокол), поэтому просто
+  // перебираем оба варианта.
+  const variants = !proxyUrl ? [''] : (proxyUrl.startsWith('socks') ? [proxyUrl, proxyUrl.replace(/^socks\d?/, 'http')] : [proxyUrl]);
+  for (const v of variants) {
+    const res = await fetchPublicIpVia(v, timeoutMs);
+    if (res.ok) return res;
+  }
+  return { ok:false, ip:'', via:'' };
+}
 
 async function verifyOutboundViaHttpProxy(port, timeoutMs=12000) {
-  if(process.platform!=='win32') return true;
-  try {
-    await execFileAsync('curl.exe',[
-      '--silent','--show-error','--fail','--noproxy','',
-      '--proxy',`http://127.0.0.1:${port}`,
-      '--connect-timeout','5','--max-time',String(Math.ceil(timeoutMs/1000)),
-      '--output',process.platform==='win32'?'NUL':'/dev/null',
-      'https://cp.cloudflare.com/generate_204'
-    ],{windowsHide:true,timeout:timeoutMs+2500,maxBuffer:64*1024});
-    return true;
-  } catch { return false; }
+  return probeVpnEndpoints(`http://127.0.0.1:${port}`, timeoutMs);
 }
 
 async function verifyTunOutbound(timeoutMs=12000) {
-  if(process.platform!=='win32') return true;
-  try {
-    await execFileAsync('curl.exe',[
-      '--silent','--show-error','--fail','--noproxy','*',
-      '--connect-timeout','5','--max-time',String(Math.ceil(timeoutMs/1000)),
-      '--output','NUL','https://cp.cloudflare.com/generate_204'
-    ],{windowsHide:true,timeout:timeoutMs+2500,maxBuffer:64*1024});
-    return true;
-  } catch { return false; }
+  // ВАЖНО: Electron (main-процесс) на Windows не использует системные маршруты TUN,
+  // поэтому запрос «напрямую» ушёл бы через обычный адаптер и показал бы домашний IP
+  // даже при работающем VPN. Проверяем туннель принудительно через локальные порты ядра.
+  const http  = `http://127.0.0.1:${settings.httpPort||10809}`;
+  const socks = `socks5://127.0.0.1:${settings.socksPort||10808}`;
+  let r = await probeVpnEndpoints(http, timeoutMs);
+  if (!r.ok) r = await probeVpnEndpoints(socks, timeoutMs);
+  return r;
 }
 
 export async function start(opts={}) {
@@ -978,11 +1223,16 @@ export async function start(opts={}) {
       if(!server) { server=servers.find(s=>s.favorite) || servers[0]; if(server) settings.activeServerId=server.id; }
       if(!server) throw new Error('Сначала добавьте VPN-сервер или подписку');
       const mode=opts.mode || settings.mode || 'proxy';
+      normalizeTunSettings(settings);
       let core = mode==='tun' && settings.tunCore ? settings.tunCore : server.core;
       if(core==='auto') core=['hysteria2','wireguard'].includes(server.protocol)?'sing-box':'xray';
       if(['hysteria2','wireguard'].includes(server.protocol)) core='sing-box';
       const exe=await ensureCore(core);
-      if(mode==='proxy' && core==='xray') {
+      // Xray в режиме TUN требует wintun.dll рядом с xray.exe.
+      if(mode==='tun' && core==='xray') await ensureXrayWintunDll(exe);
+      // Локальные порты прокси поднимаем в обоих режимах: они нужны и для
+      // реальной проверки туннеля (Electron/приложения не всегда ходят через маршруты TUN).
+      {
         const socks=await findFreeTcpPort(settings.socksPort, new Set());
         const http=await findFreeTcpPort(settings.httpPort, new Set([socks]));
         settings.socksPort=socks; settings.httpPort=http; save();
@@ -996,7 +1246,28 @@ export async function start(opts={}) {
       const onCoreOutput=(d, warn=false)=>{
         const text=String(d||'');
         if(/\baccepted\b|\[tun-in\s*>>\s*proxy\]|\[http-in\s*>>\s*proxy\]|\[socks-in\s*>>\s*proxy\]/i.test(text)) runtime.trafficSeen=true;
-        (warn?console.warn:console.log)('[proxy]',text.trim());
+        // Логи ядер на Windows пишутся в OEM-кодировке (CP866) — при перенаправлении
+        // в консоль Electron кириллица превращается в «╨Т╨╜╨╡╤И╨╜╤П...». Декодируем:
+        // символы ╨-╙ из диапазона U+2500-U+2513 — это байты 0xD0-0xD3, то есть
+        // UTF-8, показанный как CP866. Восстанавливаем байты и читаем как UTF-8.
+        let decoded=text;
+        try {
+          if(/[\u2500-\u2513]{2}/.test(text)){
+            const bytes=Uint8Array.from(Buffer.from(text,'binary'));
+            const fixed=new TextDecoder('utf-8',{fatal:false}).decode(bytes);
+            if(/[\u0400-\u04FF]/.test(fixed)) decoded=fixed;
+          }
+        } catch {}
+        // Ошибки создания TUN-адаптера показываем явно и недвусмысленно.
+        if(/Failed to find matching adapter name|create.*tun.*fail|wintun/i.test(decoded)){
+          if(/wintun\.dll/i.test(decoded) && !/Failed to find matching adapter/i.test(decoded)){
+            console.warn('[proxy] Xray не может создать TUN: отсутствует wintun.dll рядом с xray.exe. Переключите «Ядро TUN» на sing-box или повторите подключение (DLL скопируется автоматически).');
+          } else {
+            console.warn('[proxy] Не удалось создать TUN-адаптер. Проверьте, что имя TUN состоит только из латинских букв/цифр и не длиннее 31 символа (Настройки → VPN), а также что драйвер Wintun установлен.');
+          }
+          return;
+        }
+        (warn?console.warn:console.log)('[proxy]',decoded.trim());
       };
       proc.stdout?.on('data',d=>onCoreOutput(d,false));
       proc.stderr?.on('data',d=>onCoreOutput(d,true));
@@ -1007,28 +1278,34 @@ export async function start(opts={}) {
       if(mode==='proxy') {
         const listening=await waitForTcpListening(settings.httpPort,12000);
         if(!listening) throw new Error(`VPN-ядро запущено, но локальный HTTP-порт ${settings.httpPort} не открылся`);
-        // Локальный HTTP-in уже поднят. Не блокируем подключение внешним health-check:
-        // он зависит от DNS/Cloudflare и мог ложно считать рабочий VPN нерабочим.
-        ready=true;
+        // Обязательная реальная проверка: туннель должен фактически доставлять трафик.
+        // Иначе UI показывал бы «работает» при недоступном/неисправном удалённом сервере.
+        const check=await verifyOutboundViaHttpProxy(settings.httpPort,15000);
+        if(!check.ok){
+          try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
+          throw new Error('Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет. Обычно это означает, что до удалённого сервера нет связи (неверный адрес/порт/ключ, сервер недоступен или протокол заблокирован). Попробуйте другой сервер или тип подключения (ws/reality/grpc).');
+        }
+        runtime.publicIp=check.ip;
         if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }
-        // Best-effort проверка: только логируем результат, но не отменяем рабочий запуск.
-        try {
-          const ok=await verifyOutboundViaHttpProxy(settings.httpPort,5000);
-          if(!ok) console.warn('[proxy] Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым.');
-        } catch {}
-      } else {
-        const adapter=await waitForTunAdapter(settings.tunName||'EpicTunnel',12000);
-        if(!adapter) throw new Error(`TUN-интерфейс «${settings.tunName||'EpicTunnel'}» не перешёл в состояние Up`);
-        // Для TUN главным критерием готовности является поднятый адаптер и живой процесс.
-        // Внешний curl оставляем только диагностическим, чтобы не блокировать рабочий TUN.
         ready=true;
-        try {
-          const ok=await verifyTunOutbound(5000);
-          if(!ok) console.warn('[proxy] Внешняя проверка TUN не прошла; TUN остаётся подключённым.');
-        } catch {}
+      } else {
+        const adapterName=tunAdapterName();
+        const adapter=await waitForTunAdapter(adapterName,12000);
+        if(!adapter) throw new Error(`TUN-интерфейс «${adapterName}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
+        // Адаптер поднят — проверяем, что трафик реально идёт через туннель.
+        // Обязательная проверка: без неё UI показывал бы «подключено», а реальный
+        // IP не менялся бы (адаптер есть, до сервера связи нет).
+        const check=await verifyTunOutbound(15000);
+        if(!check.ok){
+          try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
+          throw new Error('Проверка VPN не пройдена: TUN-интерфейс поднят, но выход в интернет через него не работает. Скорее всего, отсутствует связь с удалённым сервером (неверные параметры, сервер недоступен или протокол заблокирован DPI). Попробуйте другое ядро (Xray/sing-box), другой сервер или режим прокси.');
+        }
+        runtime.publicIp=check.ip;
+        ready=true;
       }
-      settings.enabled=ready; settings.mode=mode; runtime.ready=ready; save(); emit(); return status();
+      settings.enabled=ready; settings.mode=mode; runtime.ready=ready; if(ready) startHealthMonitor(); save(); emit(); return status();
     } catch (e) {
+      stopHealthMonitor();
       if(proc && runtime.proc===proc) { try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}} }
       runtime.proc=null; runtime.core=null; runtime.configPath=null; runtime.ready=false; runtime.trafficSeen=false;
       if(runtime.systemProxyChanged){try{await setWindowsSystemProxy(false)}catch{};runtime.systemProxyChanged=false;}
@@ -1039,10 +1316,11 @@ export async function start(opts={}) {
   try { return await startPromise; } finally { startPromise=null; }
 }
 export async function stop() {
+  stopHealthMonitor();
   const proc=runtime.proc;
   runtime.ready=false;
   if(proc){ try{proc.kill();}catch{}; if(process.platform==='win32'){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true});}catch{}} if(runtime.proc===proc) runtime.proc=null; }
-  runtime.core=null; runtime.configPath=null;
+  runtime.core=null; runtime.configPath=null; runtime.publicIp='';
   if(runtime.systemProxyChanged){ try{await setWindowsSystemProxy(false);}catch{}; runtime.systemProxyChanged=false; }
   settings.enabled=false; save(); emit(); return status();
 }
@@ -1050,7 +1328,29 @@ export async function toggle(){ return runtime.proc?stop():start(); }
 
 export function status() {
   if(!settings) init(); const a=servers.find(s=>s.id===settings.activeServerId)||null;
-  return {running:!!runtime.proc && runtime.ready===true, starting:!!runtime.proc && runtime.ready!==true, pid:runtime.proc?.pid||null, core:runtime.core, mode:runtime.mode, selected:a?{...a}:null, settings:getSettings(), servers:getServers(), subscriptions:getSubscriptions(), routes:getRoutes()};
+  return {running:!!runtime.proc && runtime.ready===true, starting:!!runtime.proc && runtime.ready!==true, pid:runtime.proc?.pid||null, core:runtime.core, mode:runtime.mode, publicIp:runtime.publicIp||'', lastCheck:runtime.lastCheckAt||0, selected:a?{...a}:null, settings:getSettings(), servers:getServers(), subscriptions:getSubscriptions(), routes:getRoutes()};
+}
+
+// Периодическая проверка живости туннеля. Без неё UI продолжал показывать
+// «работает», даже когда удалённый сервер обрывал связь уже после подключения.
+let healthTimer = null;
+let consecutiveHealthFails = 0;
+function stopHealthMonitor() { if(healthTimer){clearInterval(healthTimer);healthTimer=null;} consecutiveHealthFails=0; }
+function startHealthMonitor() {
+  stopHealthMonitor();
+  healthTimer=setInterval(async()=>{
+    if(!runtime.proc || !runtime.ready) return;
+    try {
+      const res = runtime.mode==='tun' ? await verifyTunOutbound(10000) : await verifyOutboundViaHttpProxy(settings.httpPort,10000);
+      if(res.ok){ consecutiveHealthFails=0; runtime.publicIp=res.ip; runtime.lastCheckAt=Date.now(); emit(); }
+      else if(++consecutiveHealthFails>=3){
+        console.warn('[proxy] VPN перестал отвечать — соединение помечено как разорванное');
+        consecutiveHealthFails=0;
+        stop().catch(()=>{});
+      }
+    } catch { /* сеть недоступна — не убиваем подключение из-за одной ошибки проверки */ }
+  },60000);
+  if(healthTimer.unref) healthTimer.unref();
 }
 
 export async function pingServerReal(id, timeout=6000, emitState=true) {
