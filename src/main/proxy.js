@@ -869,7 +869,7 @@ async function ensureXrayWintunDll(xrayExePath) {
 
 function buildXrayConfig(server, mode='proxy') {
   const route=routeForConfig(settings.routeProfile);
-  const inbounds= mode==='tun' ? [{tag:'tun-in',port:0,protocol:'tun',settings:{name:tunAdapterName(),mtu:Number(settings.mtu||1500),gateway:['198.18.0.1/15','fdfe:dcba:9876::1/126'],address:['198.18.0.1/15','fdfe:dcba:9876::1/126'],dns:settings.dns||['1.1.1.1','8.8.8.8'],poolSize:2,onDropped:'bypass'}}] :[{tag:'socks-in',listen:'127.0.0.1',port:Number(settings.socksPort||10808),protocol:'socks',settings:{udp:true,accounts:settings.socksAuthMode==='manual'&&settings.socksAuthUser?[{user:settings.socksAuthUser,pass:settings.socksAuthPassword||''}]:undefined},sniffing:{enabled:true,destOverride:['http','tls','quic']}},{tag:'http-in',listen:'127.0.0.1',port:Number(settings.httpPort||10809),protocol:'http',settings:{accounts:settings.httpAuthMode==='manual'&&settings.httpAuthUser?[{user:settings.httpAuthUser,pass:settings.httpAuthPassword||''}]:undefined}}];
+  const inbounds= mode==='tun' ? [{tag:'tun-in',port:0,protocol:'tun',settings:{name:tunAdapterName(),mtu:Number(settings.mtu||1500),gateway:['198.18.0.1/15','fdfe:dcba:9876::1/126'],address:['198.18.0.1/15','fdfe:dcba:9876::1/126'],dns:settings.dns||['1.1.1.1','8.8.8.8'],poolSize:2,onDropped:'bypass'}}] : [{tag:'socks-in',listen:'127.0.0.1',port:Number(settings.socksPort||10808),protocol:'socks',settings:{udp:true,accounts:settings.socksAuthMode==='manual'&&settings.socksAuthUser?[{user:settings.socksAuthUser,pass:settings.socksAuthPassword||''}]:undefined},sniffing:{enabled:true,destOverride:['http','tls','quic']}},{tag:'http-in',listen:'127.0.0.1',port:Number(settings.httpPort||10809),protocol:'http',settings:{accounts:settings.httpAuthMode==='manual'&&settings.httpAuthUser?[{user:settings.httpAuthUser,pass:settings.httpAuthPassword||''}]:undefined}}];
   const outbounds=[{tag:'proxy',...xrayOutbound(server)},{tag:'direct',protocol:'freedom',settings:{}},{tag:'block',protocol:'blackhole',settings:{}}];
   // ВАЖНО: поле называется `outbounds` и это массив. Ранее сюда попадал пустой объект {},
   // из-за чего Xray запускался без outbound'а `proxy`, правила маршрутизации TUN не
@@ -889,6 +889,8 @@ function buildSingboxConfig(server, mode='tun') {
   }
   // ВАЖНО: без route.final весь принятый TUN-ом трафик уходил НАПРЯМУЮ (в обход
   // сервера): интерфейс поднят, «VPN работает», но реальный IP не меняется.
+  // interface_name — нормализованное имя (латиница, <=31 символ), иначе Windows
+  // отказывает в создании адаптера («Элемент не найден», Code 0x00000490).
   return {log:{level:'warn'},inbounds:[{type:'tun',tag:'tun-in',interface_name:tunAdapterName(),address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:false,sniff:true}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{final:'proxy',auto_detect_interface:true,sniff:true,rules:routeRules}};
 }
 
@@ -1226,9 +1228,10 @@ export async function start(opts={}) {
       if(core==='auto') core=['hysteria2','wireguard'].includes(server.protocol)?'sing-box':'xray';
       if(['hysteria2','wireguard'].includes(server.protocol)) core='sing-box';
       const exe=await ensureCore(core);
+      // Xray в режиме TUN требует wintun.dll рядом с xray.exe.
       if(mode==='tun' && core==='xray') await ensureXrayWintunDll(exe);
       // Локальные порты прокси поднимаем в обоих режимах: они нужны и для
-      // реальной проверки туннеля (Electron не ходит через маршруты TUN).
+      // реальной проверки туннеля (Electron/приложения не всегда ходят через маршруты TUN).
       {
         const socks=await findFreeTcpPort(settings.socksPort, new Set());
         const http=await findFreeTcpPort(settings.httpPort, new Set([socks]));
@@ -1286,9 +1289,12 @@ export async function start(opts={}) {
         if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }
         ready=true;
       } else {
-        const adapter=await waitForTunAdapter(tunAdapterName(),12000);
-        if(!adapter) throw new Error(`TUN-интерфейс «${tunAdapterName()}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
+        const adapterName=tunAdapterName();
+        const adapter=await waitForTunAdapter(adapterName,12000);
+        if(!adapter) throw new Error(`TUN-интерфейс «${adapterName}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
         // Адаптер поднят — проверяем, что трафик реально идёт через туннель.
+        // Обязательная проверка: без неё UI показывал бы «подключено», а реальный
+        // IP не менялся бы (адаптер есть, до сервера связи нет).
         const check=await verifyTunOutbound(15000);
         if(!check.ok){
           try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}

@@ -92,9 +92,11 @@ test('VPN status becomes connected only after a real end-to-end check through th
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/ready:\s*false/);
   assert.match(proxy,/waitForTcpListening\(settings\.httpPort,12000\)/);
-  assert.match(proxy,/waitForTunAdapter\(tunAdapterName\(\),12000\)/);
-  // Реальная проверка туннеля обязательна: без неё UI врал «работает».
+  assert.match(proxy,/waitForTunAdapter\(adapterName,12000\)/);
+  // Реальная проверка туннеля обязательна: без неё UI врал «работает»,
+  // а реальный IP не менялся.
   assert.match(proxy,/const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,15000\)/);
+  assert.match(proxy,/const check=await verifyTunOutbound\(15000\)/);
   assert.match(proxy,/if\(!check\.ok\)/);
   assert.match(proxy,/Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет/);
   assert.match(proxy,/Проверка VPN не пройдена: TUN-интерфейс поднят, но выход в интернет через него не работает/);
