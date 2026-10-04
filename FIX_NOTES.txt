@@ -1,0 +1,32 @@
+Zapret Launcher 1.4.10 fixed v23
+
+- Windows system proxy is applied through both HKCU Internet Settings and WinINet INTERNET_OPTION_PER_CONNECTION_OPTION.
+- ProxyServer is a single HTTP CONNECT endpoint: 127.0.0.1:<httpPort>.
+- ProxyOverride is <local> while Launcher owns the proxy; PAC/auto-detect are disabled.
+- MigrateProxy is explicitly set to 0 to avoid stale migration behavior.
+- WinINet refresh + WM_SETTINGCHANGE are sent after applying/restoring settings.
+- Existing Xray/sing-box/TUN/VLESS fixes from v22 are retained.
+
+Note: browser-specific policies or WebRTC can still bypass/independently expose an address even when the Windows system proxy is correctly applied. Chromium on Windows normally uses the WinINet system proxy configuration.
+
+v24 — mixed VPN mode
+- Added mode `mixed`: sing-box TUN + Windows system HTTP proxy simultaneously.
+- Mixed mode forces the system proxy on and keeps the user-facing TUN route active.
+- On Windows, mixed mode uses sing-box for TUN to avoid the Xray 26.3.27 TUN path.
+- Local HTTP/SOCKS inbounds remain available in mixed mode for applications that honor system proxy.
+- Existing VLESS/TLS/Reality and UDP/XUDP fixes are preserved.
+
+## v25
+- System proxy is the default connection mode; legacy saved modes are migrated once to proxy.
+- Fixed WinINet probe flags so INTERNET_FLAG_NO_CACHE_WRITE is passed as UInt32.
+
+v26 (2026-10-04):
+- Windows TUN on sing-box now resolves the active upstream server hostname before startup and adds every resolved IP as route_exclude_address (/32 or /128).
+- This prevents the VLESS server connection itself from re-entering the TUN route and causing the `connection download closed: unknown version: 72` loop symptom.
+- Kept route.auto_detect_interface enabled so outbound connections remain on the physical/default NIC.
+- Added regression coverage for the upstream route exclusion.
+
+v27 — system proxy readiness ordering and curl probe
+- In system-proxy mode, Windows system proxy is applied immediately after the local HTTP proxy starts, before remote readiness validation.
+- Replaced the custom socket-based proxy readiness path with the real Windows curl.exe proxy path for HTTP/HTTPS checks, matching the proven manual test on Windows.
+- Keeps previous TUN/sing-box/VLESS routing fixes intact.

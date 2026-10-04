@@ -1,0 +1,741 @@
+/* ================================================================
+   Zapret Launcher — красно-серый глассморфизм
+   Слоистое матовое стекло, блики, свечение, аккуратная типографика
+   ================================================================ */
+
+:root {
+  --accent: #ff2e4c;
+  --accent-rgb: 255, 46, 76;
+  --app-bg: #14161b;
+  --app-bg-rgb: 20, 22, 27;
+  --red: var(--accent);
+  --red-soft: rgba(var(--accent-rgb), 0.16);
+  --green: #2ee06a;
+  --green-soft: rgba(46, 224, 106, 0.16);
+  --amber: #ffb454;
+  --text: #e9eaee;
+  --text-dim: #9aa0ab;
+  --line: rgba(255, 255, 255, 0.10);
+  --glass: linear-gradient(150deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028));
+  --glass-strong: linear-gradient(160deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05));
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  --radius: 18px;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  color: var(--text);
+  background: transparent;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+input, select { font: inherit; color: inherit; }
+
+.hidden { display: none !important; }
+
+/* ==================== Окно ==================== */
+
+#window {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+  background:
+    radial-gradient(1100px 560px at 88% -12%, var(--red-soft), transparent 62%),
+    radial-gradient(820px 480px at -10% 112%, rgba(var(--accent-rgb), 0.09), transparent 60%),
+    linear-gradient(160deg, rgba(var(--app-bg-rgb), 0.90), rgba(var(--app-bg-rgb), 0.82));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: blur(46px) saturate(150%);
+  backdrop-filter: blur(46px) saturate(150%);
+}
+
+/* лёгкий шум/блик поверх стекла */
+#window::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.016) 0 2px, transparent 2px 6px),
+    radial-gradient(600px 220px at 50% -80px, rgba(255, 255, 255, 0.07), transparent 70%);
+  z-index: 0;
+}
+
+#window > * { position: relative; z-index: 1; }
+
+/* ==================== Заголовок ==================== */
+
+#titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 46px;
+  flex: 0 0 auto;
+  padding: 0 10px 0 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  -webkit-app-region: drag;
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+
+.brand-logo {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  background: linear-gradient(145deg, var(--red), color-mix(in srgb, var(--red) 58%, #000));
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.brand-logo svg { width: 14px; height: 14px; fill: currentColor; stroke: none; }
+
+.brand-name { font-weight: 650; letter-spacing: 0.2px; }
+
+.brand-ver {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.win-controls { display: flex; align-items: center; gap: 4px; -webkit-app-region: no-drag; }
+
+.wbtn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--text-dim);
+  transition: background 0.15s, color 0.15s;
+}
+.wbtn:hover { background: rgba(255, 255, 255, 0.09); color: var(--text); }
+.wbtn-close:hover { background: #e0243a; color: #fff; }
+
+/* ==================== Контент ==================== */
+
+#main {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 18px 20px 26px;
+}
+
+.sec-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 12px;
+  font-size: 15px;
+  font-weight: 640;
+  color: var(--text);
+}
+.sec-title svg { color: var(--red); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+/* ==================== Плитки ==================== */
+
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 118px;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), var(--shadow);
+  backdrop-filter: blur(18px);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s, background 0.18s;
+  animation: tileIn 0.28s ease both;
+}
+
+@keyframes tileIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+/* глянцевый блик */
+.tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(140px 60px at 18% -20%, rgba(255, 255, 255, 0.16), transparent 70%);
+}
+
+.tile:hover {
+  transform: translateY(-3px);
+  border-color: rgba(var(--accent-rgb), 0.55);
+  box-shadow: 0 14px 34px rgba(var(--accent-rgb), 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.tile:active { transform: translateY(-1px) scale(0.99); }
+
+.tile.running {
+  background: linear-gradient(150deg, rgba(46, 224, 106, 0.16), rgba(46, 224, 106, 0.045));
+  border-color: rgba(46, 224, 106, 0.55);
+  box-shadow: 0 10px 30px rgba(46, 224, 106, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.t-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(145deg, rgba(var(--accent-rgb), 0.9), color-mix(in srgb, var(--accent) 58%, #000));
+  box-shadow: 0 5px 16px rgba(var(--accent-rgb), 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.t-icon svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
+
+.tile.running .t-icon {
+  background: linear-gradient(145deg, rgba(46, 224, 106, 0.92), rgba(18, 140, 66, 0.92));
+  box-shadow: 0 5px 16px rgba(46, 224, 106, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.t-label { font-size: 14px; font-weight: 620; line-height: 1.25; padding-right: 22px; }
+
+.t-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #565c66; flex: 0 0 auto; }
+
+.tile.running .t-status { color: #7ef0a8; }
+.tile.running .dot { background: var(--green); animation: pulse 1.5s infinite; }
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(46, 224, 106, 0.5); }
+  70% { box-shadow: 0 0 0 8px rgba(46, 224, 106, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(46, 224, 106, 0); }
+}
+
+.star {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--text-dim);
+  opacity: 0.45;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  z-index: 2;
+}
+.tile:hover .star { opacity: 1; }
+.star:hover { background: rgba(255, 255, 255, 0.1); color: var(--amber); }
+.star.on { opacity: 1; color: var(--amber); }
+.star.on svg { fill: currentColor; }
+.star svg { width: 14px; height: 14px; }
+
+/* ==================== Баннеры ==================== */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  background: linear-gradient(150deg, rgba(var(--accent-rgb), 0.16), rgba(var(--accent-rgb), 0.05));
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  animation: tileIn 0.3s ease both;
+}
+.banner.warn {
+  background: linear-gradient(150deg, rgba(255, 180, 84, 0.14), rgba(255, 180, 84, 0.04));
+  border-color: rgba(255, 180, 84, 0.35);
+}
+
+.banner-ic {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(145deg, var(--red), #b4102f);
+  box-shadow: 0 5px 16px rgba(var(--accent-rgb), 0.4);
+}
+.banner.warn .banner-ic { background: linear-gradient(145deg, var(--amber), #d07a1e); box-shadow: 0 5px 16px rgba(255, 180, 84, 0.35); }
+
+.banner-text { display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto; }
+.banner-text b { font-size: 13.5px; }
+.banner-text span { font-size: 12px; color: var(--text-dim); line-height: 1.4; }
+
+/* ==================== Кнопки ==================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 11px;
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  font-weight: 560;
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.btn:hover { transform: translateY(-1px); border-color: rgba(255, 255, 255, 0.25); }
+.btn:active { transform: translateY(0); }
+
+.btn-red {
+  color: #fff;
+  background: linear-gradient(145deg, var(--red), color-mix(in srgb, var(--red) 58%, #000));
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 6px 18px rgba(var(--accent-rgb), 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.btn-red:hover { box-shadow: 0 8px 24px rgba(var(--accent-rgb), 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35); }
+
+.btn.ghost { background: rgba(255, 255, 255, 0.04); box-shadow: none; }
+.btn.ghost:hover { background: rgba(255, 255, 255, 0.09); }
+
+.btn:disabled { opacity: 0.45; pointer-events: none; }
+
+/* ==================== Поля ==================== */
+
+input[type="text"], select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input[type="text"]:focus, select:focus { border-color: rgba(var(--accent-rgb), 0.6); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18); }
+input[readonly] { color: var(--text-dim); }
+select option { background: #24262c; }
+
+.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-dim); }
+
+.row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.row.top-gap, .top-gap { margin-top: 10px; }
+
+.hint { margin-top: 9px; font-size: 11.5px; line-height: 1.45; color: var(--text-dim); }
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+}
+.kv:last-of-type { border-bottom: none; }
+.kv span { color: var(--text-dim); }
+.kv b { font-weight: 560; }
+.kv b.ok { color: #7ef0a8; }
+.kv b.bad { color: #ff8095; }
+.kv b.warn { color: var(--amber); }
+
+/* ==================== Переключатели ==================== */
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  cursor: pointer;
+  user-select: none;
+}
+.switch input { display: none; }
+
+.slider {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 21px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  transition: background 0.18s, border-color 0.18s;
+}
+.slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #8d939d;
+  transition: transform 0.18s, background 0.18s;
+}
+.switch input:checked + .slider { background: linear-gradient(145deg, var(--red), color-mix(in srgb, var(--red) 58%, #000)); border-color: rgba(255, 255, 255, 0.3); }
+.switch input:checked + .slider::after { transform: translateX(17px); background: #fff; }
+
+.switch-label { font-size: 12.5px; color: var(--text); line-height: 1.35; }
+
+/* ==================== Прогресс ==================== */
+
+.progress {
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+#updProgressBar {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--red), color-mix(in srgb, var(--red) 62%, white));
+  box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.6);
+  transition: width 0.25s ease;
+}
+
+/* ==================== Пустое состояние ==================== */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 44px 24px;
+  border-radius: 20px;
+  border: 1.5px dashed rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.025);
+  text-align: center;
+}
+.empty svg { width: 34px; height: 34px; color: var(--text-dim); }
+.empty p { font-size: 13px; color: var(--text-dim); line-height: 1.55; }
+
+/* ==================== Оверлеи / Панели ==================== */
+
+/* оверлеи без тёмной подложки: центрированные стеклянные панели */
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: transparent;
+  animation: fadeIn 0.18s ease both;
+}
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.overlay.centered { inset: 0; border-radius: 16px; }
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, calc(100% - 48px));
+  height: min(640px, calc(100% - 48px));
+  border-radius: 20px;
+  background:
+    radial-gradient(700px 300px at 90% -10%, var(--red-soft), transparent 60%),
+    linear-gradient(160deg, rgba(44, 46, 52, 0.985), rgba(22, 23, 27, 0.99));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  animation: panelIn 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+.panel.small { width: min(480px, 92vw); height: auto; }
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 12px 14px 12px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.panel-title { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 640; }
+.panel-title svg { color: var(--red); }
+
+.panel-body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  min-height: 0;
+}
+
+.tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 10px;
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.tab {
+  padding: 9px 12px;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 540;
+  color: var(--text-dim);
+  transition: background 0.15s, color 0.15s;
+}
+.tab:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+.tab.active {
+  color: #fff;
+  background: linear-gradient(145deg, rgba(var(--accent-rgb), 0.85), color-mix(in srgb, var(--accent) 58%, #000));
+  box-shadow: 0 5px 16px rgba(var(--accent-rgb), 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.pages {
+  overflow-y: auto;
+  padding: 16px 18px 22px;
+  min-width: 0;
+}
+
+.page { display: none; }
+.page.active { display: block; animation: tileIn 0.22s ease both; }
+
+.card {
+  padding: 14px 16px 15px;
+  margin-bottom: 14px;
+  border-radius: 15px;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.card.danger { border-color: rgba(var(--accent-rgb), 0.4); background: linear-gradient(150deg, rgba(var(--accent-rgb), 0.1), rgba(var(--accent-rgb), 0.03)); }
+
+.card h3 { font-size: 13px; font-weight: 640; margin-bottom: 10px; letter-spacing: 0.2px; }
+
+.onboard-body { display: flex; flex-direction: column; gap: 10px; padding: 20px 22px 24px; }
+.onboard-body p { font-size: 13px; line-height: 1.6; color: var(--text-dim); }
+.onboard-body b { color: var(--text); }
+
+/* ==================== Результаты диагностики ==================== */
+
+.d-item {
+  display: flex;
+  gap: 10px;
+  padding: 9px 12px;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 3px solid var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.45;
+  animation: tileIn 0.25s ease both;
+}
+.d-item.ok { border-left-color: var(--green); }
+.d-item.warn { border-left-color: var(--amber); }
+.d-item.fail { border-left-color: var(--red); }
+.d-item b { display: block; margin-bottom: 2px; font-size: 12.5px; }
+.d-item span { color: var(--text-dim); }
+
+/* ==================== Тосты ==================== */
+
+#toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-width: 360px;
+}
+
+.toast {
+  padding: 11px 14px;
+  border-radius: 13px;
+  background: linear-gradient(150deg, rgba(48, 50, 56, 0.96), rgba(26, 27, 31, 0.97));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 3px solid var(--red);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  font-size: 12.5px;
+  line-height: 1.45;
+  animation: toastIn 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: none; }
+}
+.toast.ok { border-left-color: var(--green); }
+.toast.warn { border-left-color: var(--amber); }
+.toast.out { opacity: 0; transform: translateX(24px); transition: 0.25s; }
+
+/* ==================== Скроллбары ==================== */
+
+::-webkit-scrollbar { width: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.24); background-clip: padding-box; }
+
+
+/* ==================== Дополнения 1.3 ==================== */
+.tg-title-icon, .tg-icon, .tg-star-dot { display:grid; place-items:center; font-weight:800; font-size:11px; letter-spacing:.4px; }
+.tg-title-icon { width:26px; height:26px; border-radius:8px; color:#fff; background:linear-gradient(145deg,var(--accent),color-mix(in srgb,var(--accent) 58%,#000)); }
+.tg-icon { width:34px; height:34px; border-radius:11px; color:#fff; background:linear-gradient(145deg,var(--accent),color-mix(in srgb,var(--accent) 58%,#000)); box-shadow:0 5px 16px rgba(var(--accent-rgb),.35); }
+.tg-tile .star { padding:0; }
+.tg-star-dot { width:20px; height:20px; border-radius:6px; color:var(--text); background:rgba(255,255,255,.09); font-size:8px; }
+.tg-version { color:var(--text-dim); font-size:12px; }
+.tg-actions { margin:0 0 16px; }
+.color-row { display:grid; grid-template-columns:1fr 120px; gap:10px; align-items:center; margin-top:10px; }
+.color-row label { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.color-row input[type=color] { width:44px; height:34px; padding:2px; border-radius:9px; border:1px solid var(--line); background:transparent; cursor:pointer; }
+.color-row input[type=text] { min-width:0; }
+#appUpdateText, #tgUpdateText { color:var(--text); }
+
+.setup-status { width:100%; padding:9px 12px; border-radius:12px; margin-top:8px; border:1px solid var(--line); background:rgba(255,255,255,.035); }
+.setup-status.ok { color:var(--green); border-color:rgba(46,224,106,.24); }
+.setup-status.bad { color:#ff7b8b; border-color:rgba(255,46,76,.24); }
+
+/* ================= PROXY CENTER ================= */
+.proxy-head-btn{min-width:58px;padding:0 10px}.proxy-mark,.proxy-panel-logo{font-size:11px;font-weight:900;letter-spacing:.08em}.proxy-quick{margin:0 0 18px;padding:20px 22px;border:1px solid rgba(255,255,255,.08);border-radius:22px;background:linear-gradient(145deg,rgba(255,46,76,.12),rgba(255,255,255,.035));backdrop-filter:blur(22px);box-shadow:0 18px 50px rgba(0,0,0,.22)}.proxy-quick-head{display:flex;justify-content:space-between;gap:18px;align-items:center}.proxy-kicker{font-size:10px;letter-spacing:.18em;text-transform:uppercase;opacity:.52;margin-bottom:5px}.proxy-quick h2{margin:0 0 5px;font-size:22px}.proxy-selected{opacity:.72;font-size:13px}.proxy-quick-actions{display:flex;align-items:center;gap:10px}.proxy-latency{min-width:48px;text-align:center;font-weight:800}.proxy-connect{min-width:124px}.proxy-mode-row{margin-top:15px;padding-top:13px;border-top:1px solid rgba(255,255,255,.06);display:flex;justify-content:space-between;align-items:center;color:rgba(255,255,255,.6);font-size:12px}.proxy-status-pill{display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.06);font-size:11px;font-weight:800}.proxy-status-pill.on{background:rgba(46,224,106,.14);color:#6bff9a;border:1px solid rgba(46,224,106,.26)}.proxy-panel{width:min(980px,calc(100% - 36px))!important;height:min(670px,calc(100% - 36px))!important}.proxy-panel-body{overflow:auto;padding:20px 22px 24px}.proxy-hero{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:20px;border:1px solid rgba(255,255,255,.08);border-radius:20px;background:linear-gradient(145deg,rgba(255,46,76,.1),rgba(255,255,255,.025));margin-bottom:16px}.proxy-hero h2{margin:0 0 6px;font-size:24px}.proxy-hero p{margin:0;opacity:.58}.proxy-hero-right{display:flex;align-items:center;gap:14px}.proxy-hero-lat{font-size:20px;font-weight:900}.proxy-connect-big{min-width:170px}.proxy-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.proxy-box{border:1px solid rgba(255,255,255,.07);border-radius:18px;padding:14px;background:rgba(255,255,255,.022);min-height:180px}.proxy-box-title{font-size:12px;font-weight:800;opacity:.65;margin-bottom:10px}.proxy-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.proxy-settings-card h3{margin-bottom:4px}.proxy-list{display:flex;flex-direction:column;gap:8px;max-height:270px;overflow:auto}.proxy-list.compact{max-height:180px}.proxy-server-row,.proxy-sub-row{display:flex;align-items:center;gap:9px;padding:11px 12px;border-radius:13px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.05);cursor:pointer;transition:.18s ease}.proxy-server-row:hover,.proxy-sub-row:hover{border-color:rgba(255,46,76,.33);background:rgba(255,46,76,.08)}.proxy-server-row.active{border-color:rgba(255,46,76,.55);background:rgba(255,46,76,.11)}.proxy-server-info{min-width:0;flex:1}.proxy-server-name{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.proxy-server-meta{font-size:10px;opacity:.52;margin-top:3px}.proxy-row-actions{display:flex;align-items:center;gap:4px}.proxy-mini{border:0;background:transparent;color:inherit;opacity:.55;border-radius:8px;padding:6px;cursor:pointer}.proxy-mini:hover{opacity:1;background:rgba(255,255,255,.06)}.proxy-ping{font-size:11px;min-width:48px;text-align:right;font-weight:800}.proxy-ping.good{color:#6bff9a}.proxy-ping.bad{color:#ff7084}.grow{flex:1;min-width:0}.field.grow{flex:1}.proxy-panel .proxy-list{max-height:320px}@media(max-width:860px){.proxy-quick-head,.proxy-hero{flex-direction:column;align-items:flex-start}.proxy-quick-actions,.proxy-hero-right{width:100%}.proxy-columns{grid-template-columns:1fr}.proxy-connect,.proxy-connect-big{flex:1}}
+
+/* ===== VPN main section ===== */
+.vpn-section{scroll-margin-top:18px;margin:0 0 28px;padding:0 0 2px}
+.vpn-section.category-section{border:0;background:transparent;box-shadow:none;backdrop-filter:none}
+.vpn-section-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:6px 0 12px}
+.vpn-section .sec-title{margin:0}
+.vpn-title-icon{margin-right:0!important;width:26px!important;height:26px!important;padding:0!important;font-size:9px!important;background:linear-gradient(145deg,var(--accent),color-mix(in srgb,var(--accent) 58%,#000));border-color:rgba(255,255,255,.14)}
+.vpn-status-pill{display:inline-flex;vertical-align:middle;align-items:center;padding:5px 9px;margin-left:8px;border-radius:999px;font-size:10px;font-weight:800;background:rgba(255,255,255,.06);opacity:.72}
+.vpn-status-pill.on{background:rgba(46,224,106,.14);color:#6bff9a;border:1px solid rgba(46,224,106,.25);opacity:1}
+.vpn-header-actions{display:flex;align-items:center;gap:8px}
+.vpn-addbar{display:flex;gap:8px;margin:0 0 16px}.vpn-addbar .vpn-sub-input{width:100%;background:rgba(255,255,255,.035);color:var(--text);border:1px solid rgba(255,255,255,.09);border-radius:14px;padding:13px 15px;outline:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 10px 24px rgba(0,0,0,.12);backdrop-filter:blur(18px);transition:.18s ease}.vpn-addbar .vpn-sub-input:focus{border-color:rgba(var(--accent-rgb),.58);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.09),inset 0 1px 0 rgba(255,255,255,.08)}
+.vpn-sub-input{min-width:0;width:100%;padding:11px 14px;border-radius:13px;background:linear-gradient(150deg,rgba(255,255,255,.075),rgba(255,255,255,.028));border:1px solid var(--line);color:var(--text);outline:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 5px 18px rgba(0,0,0,.16);backdrop-filter:blur(18px);transition:border-color .15s,box-shadow .15s,background .15s}
+.vpn-sub-input::placeholder{color:rgba(233,234,238,.42)}
+.vpn-sub-input:focus{border-color:rgba(var(--accent-rgb),.55);background:linear-gradient(150deg,rgba(255,255,255,.09),rgba(255,255,255,.035));box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12),inset 0 1px 0 rgba(255,255,255,.08),0 8px 22px rgba(0,0,0,.2)}
+.icon-btn{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:rgba(255,255,255,.045);border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.1);transition:.16s ease}.icon-btn svg{width:17px;height:17px}.icon-btn:hover{transform:translateY(-1px);background:rgba(255,46,76,.13);border-color:rgba(255,46,76,.35);color:#fff}.icon-btn:active{transform:none}
+.vpn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:14px}
+.vpn-server-tile{position:relative;display:flex;flex-direction:column;gap:8px;min-height:118px;padding:16px;border-radius:var(--radius);background:var(--glass);border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.09),var(--shadow);backdrop-filter:blur(18px);cursor:pointer;overflow:hidden;text-align:left;transition:border-color .18s,box-shadow .18s,background .18s;animation:none}
+.vpn-server-tile:after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(140px 60px at 18% -20%,rgba(255,255,255,.16),transparent 70%)}
+.vpn-server-tile:hover{transform:none;border-color:rgba(var(--accent-rgb),.55);box-shadow:0 14px 34px rgba(var(--accent-rgb),.28),inset 0 1px 0 rgba(255,255,255,.12)}
+.vpn-server-tile:active{transform:none}
+.vpn-server-tile.active{border-color:rgba(255,46,76,.58);background:linear-gradient(150deg,rgba(255,46,76,.13),rgba(255,255,255,.035))}
+.vpn-server-tile.running{background:linear-gradient(150deg,rgba(46,224,106,.16),rgba(46,224,106,.045));border-color:rgba(46,224,106,.58);box-shadow:0 10px 30px rgba(46,224,106,.20),inset 0 1px 0 rgba(255,255,255,.1)}
+.vpn-tile-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;color:#fff;background:linear-gradient(145deg,rgba(var(--accent-rgb),.9),color-mix(in srgb,var(--accent) 58%,#000));box-shadow:0 5px 16px rgba(var(--accent-rgb),.4),inset 0 1px 0 rgba(255,255,255,.3)}
+.vpn-tile-icon svg{width:17px;height:17px;fill:none;stroke:currentColor}.vpn-server-tile.running .vpn-tile-icon{background:linear-gradient(145deg,rgba(46,224,106,.92),rgba(18,140,66,.92));box-shadow:0 5px 16px rgba(46,224,106,.42),inset 0 1px 0 rgba(255,255,255,.3)}
+.vpn-star,.vpn-delete{position:absolute;width:28px;height:28px;display:grid;place-items:center;border-radius:9px;background:transparent;border:0;cursor:pointer;color:inherit;z-index:3;opacity:.46}.vpn-star{top:10px;right:10px;color:#ffd65a;font-size:16px}.vpn-delete{right:10px;bottom:11px;color:var(--text-dim);font-size:18px}.vpn-server-tile:hover .vpn-star,.vpn-server-tile:hover .vpn-delete{opacity:1}.vpn-star:hover,.vpn-delete:hover{background:rgba(255,255,255,.08)}
+.vpn-server-name{font-size:14px;font-weight:620;line-height:1.25;padding-right:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.vpn-protocols{display:flex;flex-wrap:wrap;gap:5px;min-height:23px}.vpn-protocols span{display:inline-flex;align-items:center;padding:4px 7px;border-radius:7px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.05);font-size:9px;font-weight:900;letter-spacing:.05em;text-transform:uppercase;opacity:.82}.vpn-tile-footer{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:4px}.vpn-ping{font-size:11px;font-weight:900;min-width:55px}.vpn-ping.good{color:#6bff9a}.vpn-ping.bad{color:#ff7084}.vpn-state{flex:1;font-size:10px;opacity:.55}.vpn-server-tile.running .vpn-state{color:#6bff9a;opacity:1;font-weight:850}
+@media(max-width:860px){.vpn-section-head{flex-direction:column;align-items:flex-start}.vpn-header-actions{width:100%;justify-content:flex-end}.vpn-addbar{flex-direction:column}.vpn-grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}}
+
+/* ================= VPN 1.4.6 ================= */
+#vpnServerGrid{display:block}
+.vpn-sub-group{margin:0 0 22px}
+.vpn-sub-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 10px;padding:0 2px}
+.vpn-sub-title{font-size:14px;font-weight:850;letter-spacing:.01em}
+.vpn-sub-meta{margin-top:3px;font-size:10px;color:var(--text-dim)}
+.vpn-sub-actions{display:flex;align-items:center;gap:7px}
+.vpn-sub-actions .icon-btn{width:34px;height:34px;border-radius:10px}
+.vpn-sub-actions .icon-btn.danger{color:#ff7a8d}
+.vpn-sub-actions .icon-btn.danger:hover{background:rgba(255,46,76,.12);border-color:rgba(255,46,76,.34)}
+.vpn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:14px}
+.vpn-server-tile{animation:none!important}
+.vpn-server-tile.active{border-color:rgba(46,224,106,.58)!important;background:linear-gradient(150deg,rgba(46,224,106,.16),rgba(46,224,106,.045))!important;box-shadow:0 10px 30px rgba(46,224,106,.19),inset 0 1px 0 rgba(255,255,255,.1)!important}
+.vpn-server-tile.active .vpn-tile-icon{background:linear-gradient(145deg,rgba(46,224,106,.92),rgba(18,140,66,.92));box-shadow:0 5px 16px rgba(46,224,106,.42),inset 0 1px 0 rgba(255,255,255,.3)}
+.vpn-server-tile:hover{border-color:rgba(var(--accent-rgb),.46)}
+.vpn-tile-top{display:flex;align-items:center;justify-content:flex-start;gap:10px;min-height:34px;padding-right:44px}
+.vpn-flag{display:inline-flex;align-items:center;justify-content:center;width:34px;height:24px;line-height:1;filter:drop-shadow(0 2px 6px rgba(0,0,0,.22))}.vpn-flag-img{display:block;width:30px;height:21px;object-fit:cover;border-radius:4px;user-select:none;-webkit-user-drag:none}
+.vpn-server-host{font-size:10px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:22px}
+.vpn-sub-input{background:linear-gradient(150deg,rgba(255,255,255,.075),rgba(255,255,255,.028))!important;border-color:var(--line)!important;color:var(--text)!important}
+.icon-btn.busy{pointer-events:none;opacity:.65}
+.icon-btn.busy svg{animation:vpnSpin .8s linear infinite}
+@keyframes vpnSpin{to{transform:rotate(360deg)}}
+.btn-danger{color:#fff;background:linear-gradient(145deg,var(--red),color-mix(in srgb,var(--red) 55%,#000));border-color:rgba(255,255,255,.22);box-shadow:0 6px 18px rgba(var(--accent-rgb),.32),inset 0 1px 0 rgba(255,255,255,.28)}
+.confirm-card{width:min(460px,calc(100% - 34px));padding:22px;border:1px solid rgba(255,255,255,.09);border-radius:20px;background:linear-gradient(145deg,rgba(35,37,43,.96),rgba(20,22,27,.98));backdrop-filter:blur(26px);box-shadow:0 28px 80px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.08);transform:translateY(8px) scale(.98);opacity:0;transition:.14s ease}
+#appConfirm.show .confirm-card{transform:none;opacity:1}
+.confirm-icon{width:44px;height:44px;display:grid;place-items:center;border-radius:13px;background:rgba(255,46,76,.12);border:1px solid rgba(255,46,76,.25);color:#ff7a8d;margin-bottom:14px}
+.confirm-icon svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.confirm-content h3{margin:0 0 7px;font-size:18px}
+.confirm-content p{margin:0;color:var(--text-dim);font-size:12px;line-height:1.5}
+.confirm-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}
+@media(max-width:860px){.vpn-grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}.vpn-sub-head{align-items:flex-start}.confirm-actions{width:100%}.confirm-actions .btn{flex:1}}
+
+
+/* VPN 1.4.6 — collapsible sections, subscription ping and emoji flags */
+.vpn-sub-heading{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer}
+.vpn-sub-icon{display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;border-radius:11px;background:linear-gradient(145deg,rgba(var(--accent-rgb),.88),rgba(var(--accent-rgb),.22));border:1px solid rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 6px 18px rgba(0,0,0,.15);font-size:20px;font-weight:900;transform:rotate(90deg)}
+.collapsible-head{cursor:pointer;user-select:none}
+.section-collapse-btn{display:inline-grid;place-items:center;margin-left:7px;width:28px;height:28px;border-radius:9px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.07);color:var(--text-dim);vertical-align:middle;transition:transform .18s,background .18s}
+.collapsible-section.collapsed .section-collapse-btn,.vpn-sub-group.collapsed .vpn-sub-collapse{transform:rotate(-90deg)}
+.collapsible-section.collapsed .section-content,.vpn-sub-group.collapsed .vpn-sub-content{display:none!important}
+.vpn-sub-head{cursor:pointer}
+.vpn-sub-group.collapsed .vpn-sub-meta{opacity:.45}
+
+.vpn-sub-ping svg{width:15px;height:15px}
+.vpn-sub-ping.busy svg{animation:vpnSpin .8s linear infinite}
+
+
+/* v28 UI: explicit action buttons, connection/ping/refresh feedback, DOM-safe collapse */
+.icon-btn.action-btn{width:auto;min-width:92px;height:36px;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:12px;font-size:11px;font-weight:800;letter-spacing:.01em;background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.028));}
+.icon-btn.action-btn span{line-height:1}.icon-btn.action-btn svg{flex:0 0 16px;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.icon-btn.compact-action{width:34px;height:34px;border-radius:10px}.icon-btn.compact-action svg{fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.section-collapse-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s ease}
+.collapsible-section.collapsed .section-collapse-btn svg,.vpn-sub-group.collapsed .vpn-sub-collapse svg{transform:rotate(-90deg)}
+.vpn-status-pill.connecting{color:#ffd36a;background:rgba(255,190,70,.12);border-color:rgba(255,190,70,.26);position:relative;padding-left:25px}
+.vpn-status-pill.connecting::before{content:"";position:absolute;left:9px;width:9px;height:9px;border-radius:50%;border:2px solid rgba(255,211,106,.25);border-top-color:#ffd36a;animation:vpnSpin .7s linear infinite}
+.vpn-section.connecting .vpn-section-head{animation:connectGlow 1.35s ease-in-out infinite}
+@keyframes connectGlow{0%,100%{filter:brightness(1)}50%{filter:brightness(1.09)}}
+.vpn-server-tile.connecting{border-color:rgba(255,190,70,.55)!important;box-shadow:0 0 0 1px rgba(255,190,70,.08),0 12px 30px rgba(255,190,70,.14),inset 0 1px 0 rgba(255,255,255,.1)!important}
+.vpn-server-tile.connecting .vpn-tile-icon{animation:connectIconPulse 1s ease-in-out infinite}
+@keyframes connectIconPulse{0%,100%{transform:scale(1);box-shadow:0 5px 16px rgba(var(--accent-rgb),.34)}50%{transform:scale(1.06);box-shadow:0 7px 22px rgba(255,190,70,.38)}}
+.vpn-server-tile.pinging .vpn-ping{animation:pingValue 1s ease-in-out infinite}
+.vpn-section.pinging .vpn-header-actions .action-btn:first-child{box-shadow:0 0 0 4px rgba(var(--accent-rgb),.08),0 0 22px rgba(var(--accent-rgb),.16)}
+@keyframes pingValue{0%,100%{opacity:.45;transform:translateX(0)}50%{opacity:1;transform:translateX(2px)}}
+.vpn-sub-group.refreshing>.vpn-sub-head,.vpn-section.refreshing .vpn-header-actions .action-btn:last-child{animation:refreshGlow 1.05s ease-in-out infinite}
+@keyframes refreshGlow{0%,100%{filter:brightness(1)}50%{filter:brightness(1.14)}}
+.vpn-sub-group.pinging>.vpn-sub-head .vpn-sub-ping{box-shadow:0 0 0 4px rgba(var(--accent-rgb),.07),0 0 18px rgba(var(--accent-rgb),.16)}
+.collapse-just-changed{animation:collapseBreathe .22s ease}
+@keyframes collapseBreathe{0%{opacity:.82}100%{opacity:1}}
+@media(max-width:640px){.icon-btn.action-btn{min-width:40px;width:40px;padding:0}.icon-btn.action-btn span{display:none}}
