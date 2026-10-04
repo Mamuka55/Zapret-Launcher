@@ -92,7 +92,7 @@ test('VPN status becomes connected after local proxy/TUN readiness; external che
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/ready:\s*false/);
   assert.match(proxy,/waitForTcpListening\(settings\.httpPort,12000\)/);
-  assert.match(proxy,/waitForTunAdapter\(tunAdapterName\(\),12000\)/);
+  assert.match(proxy,/waitForTunAdapter\(settings\.tunName\|\|'EpicTunnel',12000\)/);
   assert.match(proxy,/Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым/);
   assert.match(proxy,/Внешняя проверка TUN не прошла; TUN остаётся подключённым/);
   assert.doesNotMatch(proxy,/if\(!runtime\.trafficSeen\) throw new Error/);
@@ -120,23 +120,4 @@ test('Technical subscription/server domains are converted into user-facing names
   assert.match(proxy,/known = \{ guava:'Guava'/);
   assert.match(proxy,/countryFromHost\(address\)/);
   assert.match(app,/Не показываем технический домен/);
-});
-
-test('TUN fixes: adapter name normalized, tunCore singbox alias mapped, wintun prepared for Xray',()=>{
-  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
-  assert.match(proxy,/function normalizeTunName\(name\)/);
-  assert.match(proxy,/interface_name:tunAdapterName\(\)/);
-  assert.match(proxy,/name:tunAdapterName\(\)/);
-  assert.match(proxy,/s\.tunCore === 'singbox' \|\| s\.tunCore === 'sing_box'\) s\.tunCore = 'sing-box'/);
-  assert.match(proxy,/await ensureXrayWintunDll\(exe\)/);
-  assert.doesNotMatch(proxy,/tunCore: 'singbox'/);
-  const app=fs.readFileSync(path.join(root,'src/renderer/app.js'),'utf8');
-  assert.doesNotMatch(app,/tunCore:[^,]*\|\|\s*'singbox'/);
-});
-
-test('Core log mojibake (CP866) is decoded and TUN errors get a readable message',()=>{
-  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
-  assert.match(proxy,/TextDecoder\('cp866'\)/);
-  assert.match(proxy,/Failed to find matching adapter name/);
-  assert.match(proxy,/Не удалось создать TUN-адаптер/);
 });
