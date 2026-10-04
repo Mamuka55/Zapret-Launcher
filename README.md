@@ -5,6 +5,7 @@
 Приложение позволяет запускать и останавливать BAT-стратегии в один клик, добавлять их в избранное, устанавливать необходимые компоненты и автоматически получать обновления с GitHub.
 
 Интерфейс выполнен в современном стиле **Glassmorphism** и поддерживает настройку цветов.
+Скачать - https://github.com/Mamuka55/Zapret-Launcher/releases/download/v1.3.5/ZapretLauncher-1.3.5-setup.exe
 
 ![Zapret Launcher](build/icon.png)
 
