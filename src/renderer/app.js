@@ -641,7 +641,7 @@ function syncProxySettings(){
     httpPort:Number($('#proxyHttpPort')?.value||10809),
     systemProxy:!!$('#proxySystemProxy')?.checked,
     mtu:Number($('#proxyMtu')?.value||1500),
-    tunCore:$('#proxyTunCore')?.value || 'singbox',
+    tunCore:$('#proxyTunCore')?.value || 'sing-box',
     tunName:($('#proxyTunName')?.value||'EpicTunnel').trim() || 'EpicTunnel',
     socksAuthMode:$('#proxySocksAuthMode')?.value || 'disable',
     httpAuthMode:$('#proxyHttpAuthMode')?.value || 'disable',
