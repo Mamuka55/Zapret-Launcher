@@ -892,7 +892,11 @@ function buildSingboxConfig(server, mode='tun') {
   // сервера): интерфейс поднят, «VPN работает», но реальный IP не меняется.
   // interface_name — нормализованное имя (латиница, <=31 символ), иначе Windows
   // отказывает в создании адаптера («Элемент не найден», Code 0x00000490).
-  return {log:{level:'warn'},inbounds:[{type:'tun',tag:'tun-in',interface_name:tunAdapterName(),address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:false,sniff:true}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{final:'proxy',auto_detect_interface:true,sniff:true,rules:routeRules}};
+  // ВАЖНО: `sniff` — это поле блока route (синтаксис sing-box >=1.11). В более
+  // старых ядрах оно вызывает "unknown field \"sniff\"" и падение валидации,
+  // поэтому добавляется только если пользовательское поле tunSniff явно включено.
+  const sniffer = settings.tunSniff === true ? {sniff:true} : {};
+  return {log:{level:'warn'},inbounds:[{type:'tun',tag:'tun-in',interface_name:tunAdapterName(),address:['172.19.0.1/30','fdfe:dcba:9876::1/126'],mtu:Number(settings.mtu||1500),auto_route:true,strict_route:false}],outbounds:[outbound,{type:'direct',tag:'direct'},{type:'block',tag:'block'}],route:{final:'proxy',auto_detect_interface:true,...sniffer,rules:routeRules}};
 }
 
 async function powerShellExpand(zip, dest) {
