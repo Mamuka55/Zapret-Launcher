@@ -88,15 +88,35 @@ test('Core release JSON parses the requestText response body, not the wrapper ob
   assert.match(proxy,/typeof raw === 'string' \? JSON\.parse\(raw\) : raw/);
 });
 
-test('VPN status becomes connected after local proxy/TUN readiness; external check is best-effort',()=>{
+test('VPN status becomes connected only after a real end-to-end check through the tunnel',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/ready:\s*false/);
   assert.match(proxy,/waitForTcpListening\(settings\.httpPort,12000\)/);
   assert.match(proxy,/waitForTunAdapter\(tunAdapterName\(\),12000\)/);
-  assert.match(proxy,/Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым/);
-  assert.match(proxy,/Внешняя проверка TUN не прошла; TUN остаётся подключённым/);
+  // Реальная проверка туннеля обязательна: без неё UI врал «работает».
+  assert.match(proxy,/const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,15000\)/);
+  assert.match(proxy,/if\(!check\.ok\)/);
+  assert.match(proxy,/Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет/);
+  assert.match(proxy,/Проверка VPN не пройдена: TUN-интерфейс поднят, но выход в интернет через него не работает/);
+  assert.doesNotMatch(proxy,/Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым/);
+  assert.doesNotMatch(proxy,/Внешняя проверка TUN не прошла; TUN остаётся подключённым/);
   assert.doesNotMatch(proxy,/if\(!runtime\.trafficSeen\) throw new Error/);
   assert.match(proxy,/running:\!\!runtime\.proc && runtime\.ready===true/);
+});
+
+test('Xray config contains non-empty outbounds array (empty object meant no proxy outbound => fake "working" VPN)',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.doesNotMatch(proxy,/outbounds\s*:\s*\{\}/);
+  assert.match(proxy,/inbounds,outbounds,routing:route\.routing/);
+});
+
+test('VPN health monitor disconnects when tunnel stops carrying traffic',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/function startHealthMonitor\(\)/);
+  assert.match(proxy,/consecutiveHealthFails>=3/);
+  assert.match(proxy,/if\(ready\) startHealthMonitor\(\)/);
+  assert.match(proxy,/stopHealthMonitor\(\);\n  const proc=runtime\.proc/);
+  assert.match(proxy,/publicIp:runtime\.publicIp\|\|''/);
 });
 
 test('VPN tiles do not move on hover or click',()=>{

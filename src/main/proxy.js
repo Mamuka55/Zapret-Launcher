@@ -850,7 +850,10 @@ function buildXrayConfig(server, mode='proxy') {
   const route=routeForConfig(settings.routeProfile);
   const inbounds= mode==='tun' ? [{tag:'tun-in',port:0,protocol:'tun',settings:{name:tunAdapterName(),mtu:Number(settings.mtu||1500),gateway:['198.18.0.1/15','fdfe:dcba:9876::1/126'],address:['198.18.0.1/15','fdfe:dcba:9876::1/126'],dns:settings.dns||['1.1.1.1','8.8.8.8'],poolSize:2,onDropped:'bypass'}}] :[{tag:'socks-in',listen:'127.0.0.1',port:Number(settings.socksPort||10808),protocol:'socks',settings:{udp:true,accounts:settings.socksAuthMode==='manual'&&settings.socksAuthUser?[{user:settings.socksAuthUser,pass:settings.socksAuthPassword||''}]:undefined},sniffing:{enabled:true,destOverride:['http','tls','quic']}},{tag:'http-in',listen:'127.0.0.1',port:Number(settings.httpPort||10809),protocol:'http',settings:{accounts:settings.httpAuthMode==='manual'&&settings.httpAuthUser?[{user:settings.httpAuthUser,pass:settings.httpAuthPassword||''}]:undefined}}];
   const outbounds=[{tag:'proxy',...xrayOutbound(server)},{tag:'direct',protocol:'freedom',settings:{}},{tag:'block',protocol:'blackhole',settings:{}}];
-  return {log:{loglevel:'warning'},dns:{servers:[...(settings.dns||['1.1.1.1','8.8.8.8'])]},inbounds,outbounds:{}, routing:route.routing};
+  // ВАЖНО: поле называется `outbounds` и это массив. Ранее сюда попадал пустой объект {},
+  // из-за чего Xray запускался без outbound'а `proxy`, правила маршрутизации TUN не
+  // применялись (весь трафик шёл напрямую), а UI показывал «работает».
+  return {log:{loglevel:'warning'},dns:{servers:[...(settings.dns||['1.1.1.1','8.8.8.8'])]},inbounds,outbounds,routing:route.routing};
 }
 
 // Xray accepts outbounds as an array; kept separate to make generated config easy to inspect.
@@ -907,6 +910,20 @@ async function ensureCore(core) {
 }
 function findExe(root,name){if(fs.existsSync(path.join(root,name)))return path.join(root,name); for(const ent of fs.readdirSync(root,{withFileTypes:true})){if(ent.isDirectory()){const p=findExe(path.join(root,ent.name),name);if(p)return p;}}return null;}
 
+function decodeOemText(raw) {
+  // Логи ядер на Windows пишутся в OEM-кодировке (CP866) — при перенаправлении
+  // кириллица превращается в «╨Т╨╜╨╡╤И╨╜╤П...». Восстанавливаем байты и читаем как UTF-8.
+  let msg = String(raw || '');
+  try {
+    if (/[\u2500-\u257F]{2}/.test(msg)) {
+      const bytes = Uint8Array.from(Buffer.from(msg, 'binary'));
+      const fixed = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      if (/[\u0400-\u04FF]/.test(fixed)) msg = fixed;
+    }
+  } catch {}
+  return msg;
+}
+
 async function validateCore(exe, configPath) {
   // Флаги проверки конфигурации различаются у ядер:
   //   xray      : `xray -test -config <файл>`        (без подкоманды run!)
@@ -921,15 +938,13 @@ async function validateCore(exe, configPath) {
   } catch (e) {
     const raw = String(e?.stderr || e?.stdout || e?.message || e);
     // Не показываем в UI «кракозябры»: байты CP866/OEM декодируем в читаемый текст.
-    let msg = raw;
-    try {
-      if (/[\u2500-\u2513\u2500-\u257F]{2}/.test(raw)) {
-        const bytes = Uint8Array.from(Buffer.from(raw, 'binary'));
-        const fixed = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-        if (/[\u0400-\u04FF]/.test(fixed)) msg = fixed;
-      }
-    } catch {}
-    throw new Error(`Проверка конфигурации не пройдена: ${msg.slice(0, 1200)}`);
+    const msg = decodeOemText(raw);
+    // Предупреждения о деприкации WebSocket/host не должны выглядеть как ошибка.
+    const lines = msg.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)
+      .filter(x => !/^Xray \d|A unified platform|^sing-box version|^$/.test(x));
+    const fatal = lines.filter(x => /error|fatal|failed|invalid|unknown/i.test(x));
+    const detail = (fatal.length ? fatal : lines).join('\n').slice(0, 1200) || 'неизвестная ошибка';
+    throw new Error(`Проверка конфигурации не пройдена: ${detail}`);
   }
 }
 
@@ -1006,30 +1021,84 @@ function latinizeName(s){
   return String(s).toLowerCase().split('').map(ch=>map[ch]!==undefined?map[ch]:ch).join('');
 }
 
+// Реальная проверка работоспособности VPN-туннеля: HTTP(S)-запрос через локальный
+// прокси к нескольким независимым endpoint'ам. Если ядро запущено, но удалённый
+// сервер недоступен (неверный ключ/порт/TLS), запросы не пройдут — и мы обязаны
+// показать «не работает», а не «работает».
+const VERIFY_ENDPOINTS = [
+  ['https://api.ip.sb/geoip', 'ip'],
+  ['https://ipinfo.io/json', 'ip'],
+  ['https://myexternalip.com/raw', null],
+  ['https://ifconfig.co/ip', null]
+];
+
+function fetchThroughProxy(url, proxyUrl, timeoutMs) {
+  return new Promise(resolve=>{
+    let settled=false; const finish=v=>{if(!settled){settled=true;resolve(v)}};
+    try {
+      const target=new URL(url);
+      const lib=target.protocol==='https:'?https:http;
+      const req=lib.get(url,{
+        agent:false,
+        ...(proxyUrl?{agent:new HttpsProxyAgentCompat(proxyUrl,target.protocol==='https:')}:{}),
+        headers:{'User-Agent':'Mozilla/5.0','Accept':'application/json, text/plain, */*'},
+        timeout:timeoutMs, family:4
+      },res=>{
+        let body=''; res.setEncoding('utf8');
+        res.on('data',c=>{body+=c; if(body.length>200000)res.destroy();});
+        res.on('end',()=>finish({status:res.statusCode||0,body}));
+      });
+      req.on('response',res=>{ if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){req.destroy();} });
+      req.on('timeout',()=>{req.destroy();finish(null)});
+      req.on('error',()=>finish(null));
+    } catch { finish(null); }
+  });
+}
+
+// Минимальный CONNECT-агент для https-запросов через http-прокси (без внешних зависимостей).
+class HttpsProxyAgentCompat {
+  constructor(proxyUrl, useConnect) {
+    const p=new URL(proxyUrl); this.host=p.hostname; this.port=Number(p.port||80); this.useConnect=!!useConnect;
+  }
+  createConnection(options, cb) {
+    const sock=new Socket(); let done=false;
+    const fail=e=>{if(!done){done=true;sock.destroy();cb(e)}};
+    sock.setTimeout(8000,()=>fail(new Error('proxy connect timeout')));
+    sock.once('error',e=>fail(e));
+    sock.connect(this.port,this.host,()=>{
+      if(!this.useConnect){ done=true; cb(null,sock); return; }
+      sock.write(`CONNECT ${options.host}:${options.port||443} HTTP/1.1\r\nHost: ${options.host}\r\n\r\n`);
+    });
+    if(this.useConnect){
+      sock.once('data',buf=>{
+        if(done)return;
+        if(/HTTP\/1\.[01] 200/.test(buf.toString('latin1').slice(0,100))){done=true;cb(null,sock);}
+        else fail(new Error('proxy CONNECT failed'));
+      });
+    }
+    return sock;
+  }
+}
+
+async function probeVpnEndpoints(proxyUrl, timeoutMs) {
+  for (const [url, ipField] of VERIFY_ENDPOINTS) {
+    const r = await fetchThroughProxy(url, proxyUrl, Math.min(6000, timeoutMs));
+    if (!r || r.status < 200 || r.status >= 400) continue;
+    let ip = '';
+    if (ipField) { try { ip = String(JSON.parse(r.body)?.[ipField]||'').trim(); } catch { ip = ''; } }
+    else ip = String(r.body||'').trim().split('\n')[0];
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) || /^[0-9a-f:]+$/i.test(ip)) return { ok:true, ip, via:url };
+  }
+  return { ok:false, ip:'', via:'' };
+}
+
 async function verifyOutboundViaHttpProxy(port, timeoutMs=12000) {
-  if(process.platform!=='win32') return true;
-  try {
-    await execFileAsync('curl.exe',[
-      '--silent','--show-error','--fail','--noproxy','',
-      '--proxy',`http://127.0.0.1:${port}`,
-      '--connect-timeout','5','--max-time',String(Math.ceil(timeoutMs/1000)),
-      '--output',process.platform==='win32'?'NUL':'/dev/null',
-      'https://cp.cloudflare.com/generate_204'
-    ],{windowsHide:true,timeout:timeoutMs+2500,maxBuffer:64*1024});
-    return true;
-  } catch { return false; }
+  return probeVpnEndpoints(`http://127.0.0.1:${port}`, timeoutMs);
 }
 
 async function verifyTunOutbound(timeoutMs=12000) {
-  if(process.platform!=='win32') return true;
-  try {
-    await execFileAsync('curl.exe',[
-      '--silent','--show-error','--fail','--noproxy','*',
-      '--connect-timeout','5','--max-time',String(Math.ceil(timeoutMs/1000)),
-      '--output','NUL','https://cp.cloudflare.com/generate_204'
-    ],{windowsHide:true,timeout:timeoutMs+2500,maxBuffer:64*1024});
-    return true;
-  } catch { return false; }
+  // В режиме TUN трафик всего процесса идёт через интерфейс; прокси не указываем.
+  return probeVpnEndpoints('', timeoutMs);
 }
 
 export async function start(opts={}) {
@@ -1100,28 +1169,31 @@ export async function start(opts={}) {
       if(mode==='proxy') {
         const listening=await waitForTcpListening(settings.httpPort,12000);
         if(!listening) throw new Error(`VPN-ядро запущено, но локальный HTTP-порт ${settings.httpPort} не открылся`);
-        // Локальный HTTP-in уже поднят. Не блокируем подключение внешним health-check:
-        // он зависит от DNS/Cloudflare и мог ложно считать рабочий VPN нерабочим.
-        ready=true;
+        // Обязательная реальная проверка: туннель должен фактически доставлять трафик.
+        // Иначе UI показывал бы «работает» при недоступном/неисправном удалённом сервере.
+        const check=await verifyOutboundViaHttpProxy(settings.httpPort,15000);
+        if(!check.ok){
+          try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
+          throw new Error('Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет. Обычно это означает, что до удалённого сервера нет связи (неверный адрес/порт/ключ, сервер недоступен или протокол заблокирован). Попробуйте другой сервер или тип подключения (ws/reality/grpc).');
+        }
+        runtime.publicIp=check.ip;
         if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }
-        // Best-effort проверка: только логируем результат, но не отменяем рабочий запуск.
-        try {
-          const ok=await verifyOutboundViaHttpProxy(settings.httpPort,5000);
-          if(!ok) console.warn('[proxy] Внешняя проверка VPN не прошла; локальный прокси остаётся подключённым.');
-        } catch {}
+        ready=true;
       } else {
         const adapter=await waitForTunAdapter(tunAdapterName(),12000);
         if(!adapter) throw new Error(`TUN-интерфейс «${tunAdapterName()}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
-        // Для TUN главным критерием готовности является поднятый адаптер и живой процесс.
-        // Внешний curl оставляем только диагностическим, чтобы не блокировать рабочий TUN.
+        // Адаптер поднят — проверяем, что трафик реально идёт через туннель.
+        const check=await verifyTunOutbound(15000);
+        if(!check.ok){
+          try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
+          throw new Error('Проверка VPN не пройдена: TUN-интерфейс поднят, но выход в интернет через него не работает. Скорее всего, отсутствует связь с удалённым сервером (неверные параметры, сервер недоступен или протокол заблокирован DPI). Попробуйте другое ядро (Xray/sing-box), другой сервер или режим прокси.');
+        }
+        runtime.publicIp=check.ip;
         ready=true;
-        try {
-          const ok=await verifyTunOutbound(5000);
-          if(!ok) console.warn('[proxy] Внешняя проверка TUN не прошла; TUN остаётся подключённым.');
-        } catch {}
       }
-      settings.enabled=ready; settings.mode=mode; runtime.ready=ready; save(); emit(); return status();
+      settings.enabled=ready; settings.mode=mode; runtime.ready=ready; if(ready) startHealthMonitor(); save(); emit(); return status();
     } catch (e) {
+      stopHealthMonitor();
       if(proc && runtime.proc===proc) { try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}} }
       runtime.proc=null; runtime.core=null; runtime.configPath=null; runtime.ready=false; runtime.trafficSeen=false;
       if(runtime.systemProxyChanged){try{await setWindowsSystemProxy(false)}catch{};runtime.systemProxyChanged=false;}
@@ -1132,6 +1204,7 @@ export async function start(opts={}) {
   try { return await startPromise; } finally { startPromise=null; }
 }
 export async function stop() {
+  stopHealthMonitor();
   const proc=runtime.proc;
   runtime.ready=false;
   if(proc){ try{proc.kill();}catch{}; if(process.platform==='win32'){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true});}catch{}} if(runtime.proc===proc) runtime.proc=null; }
@@ -1143,7 +1216,29 @@ export async function toggle(){ return runtime.proc?stop():start(); }
 
 export function status() {
   if(!settings) init(); const a=servers.find(s=>s.id===settings.activeServerId)||null;
-  return {running:!!runtime.proc && runtime.ready===true, starting:!!runtime.proc && runtime.ready!==true, pid:runtime.proc?.pid||null, core:runtime.core, mode:runtime.mode, selected:a?{...a}:null, settings:getSettings(), servers:getServers(), subscriptions:getSubscriptions(), routes:getRoutes()};
+  return {running:!!runtime.proc && runtime.ready===true, starting:!!runtime.proc && runtime.ready!==true, pid:runtime.proc?.pid||null, core:runtime.core, mode:runtime.mode, publicIp:runtime.publicIp||'', lastCheck:runtime.lastCheckAt||0, selected:a?{...a}:null, settings:getSettings(), servers:getServers(), subscriptions:getSubscriptions(), routes:getRoutes()};
+}
+
+// Периодическая проверка живости туннеля. Без неё UI продолжал показывать
+// «работает», даже когда удалённый сервер обрывал связь уже после подключения.
+let healthTimer = null;
+let consecutiveHealthFails = 0;
+function stopHealthMonitor() { if(healthTimer){clearInterval(healthTimer);healthTimer=null;} consecutiveHealthFails=0; }
+function startHealthMonitor() {
+  stopHealthMonitor();
+  healthTimer=setInterval(async()=>{
+    if(!runtime.proc || !runtime.ready) return;
+    try {
+      const res = runtime.mode==='tun' ? await verifyTunOutbound(10000) : await verifyOutboundViaHttpProxy(settings.httpPort,10000);
+      if(res.ok){ consecutiveHealthFails=0; runtime.publicIp=res.ip; runtime.lastCheckAt=Date.now(); emit(); }
+      else if(++consecutiveHealthFails>=3){
+        console.warn('[proxy] VPN перестал отвечать — соединение помечено как разорванное');
+        consecutiveHealthFails=0;
+        stop().catch(()=>{});
+      }
+    } catch { /* сеть недоступна — не убиваем подключение из-за одной ошибки проверки */ }
+  },60000);
+  if(healthTimer.unref) healthTimer.unref();
 }
 
 export async function pingServerReal(id, timeout=6000, emitState=true) {
