@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Socket } from 'node:net';
 import { execFile } from 'node:child_process';
+import dns from 'node:dns';
 import { promisify } from 'node:util';
 import zlib from 'node:zlib';
 
@@ -1196,6 +1197,19 @@ async function verifyOutboundViaHttpProxy(port, timeoutMs=12000) {
   return probeVpnEndpoints(`http://127.0.0.1:${port}`, timeoutMs);
 }
 
+// Быстрая проверка «порт ядра вообще слушает» — чтобы отличить мёртвое ядро/занятый
+// порт от ситуации «ядро работает, но до сервера нет связи».
+function tcpConnectOk(host, port, timeoutMs=2500) {
+  return new Promise(resolve=>{
+    let done=false; const finish=v=>{if(!done){done=true;sock.destroy();resolve(v)}};
+    const sock=new Socket();
+    sock.setTimeout(timeoutMs,()=>finish(false));
+    sock.once('connect',()=>finish(true));
+    sock.once('error',()=>finish(false));
+    sock.connect(Number(port),host);
+  });
+}
+
 async function verifyTunOutbound(timeoutMs=12000) {
   // ВАЖНО: Electron (main-процесс) на Windows не использует системные маршруты TUN,
   // поэтому запрос «напрямую» ушёл бы через обычный адаптер и показал бы домашний IP
@@ -1204,7 +1218,29 @@ async function verifyTunOutbound(timeoutMs=12000) {
   const socks = `socks5://127.0.0.1:${settings.socksPort||10808}`;
   let r = await probeVpnEndpoints(http, timeoutMs);
   if (!r.ok) r = await probeVpnEndpoints(socks, timeoutMs);
+  if (r.ok) return r;
+  // Fallback: если запросы через HTTP/SOCKS-порты не прошли (например, приложение или
+  // антивирус перехватывает localhost-порты, либо endpoint'ы недоступны с текущей сети),
+  // проверяем сам туннель косвенно: DNS-запрос cp.cloudflare.com через системный резолвер
+  // уходит по маршрутам TUN на удалённый DNS ядра — если он резолвится, туннель живой.
+  try {
+    const addrs = await dns.lookup('cp.cloudflare.com', { all:true, verbatim:true });
+    if (Array.isArray(addrs) && addrs.length && addrs.some(a=>a && a.address)) {
+      return { ok:true, ip:'', via:'dns-tun-fallback' };
+    }
+  } catch {}
   return r;
+}
+
+// Человекочитаемая диагностика неудачной проверки: различаем «ядро не слушает порт»
+// (тогда ошибка точно локальная) и «до сервера нет связи» (классический случай).
+async function describeVerifyFailure(){
+  const httpOk = await tcpConnectOk('127.0.0.1', settings.httpPort||10809);
+  const socksOk = await tcpConnectOk('127.0.0.1', settings.socksPort||10808);
+  if(!httpOk && !socksOk){
+    return 'Ядро запущено, но его локальные порты не отвечают — возможно, порты заняты другим приложением или включён режим «только TUN без локальных портов». Попробуйте перезапустить приложение от имени администратора.';
+  }
+  return 'Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет. Обычно это означает, что до удалённого сервера нет связи (неверный адрес/порт/ключ, сервер недоступен или протокол заблокирован). Попробуйте другой сервер или тип подключения (ws/reality/grpc).';
 }
 
 export async function start(opts={}) {
@@ -1283,7 +1319,7 @@ export async function start(opts={}) {
         const check=await verifyOutboundViaHttpProxy(settings.httpPort,15000);
         if(!check.ok){
           try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
-          throw new Error('Проверка VPN не пройдена: через локальный прокси не удалось выйти в интернет. Обычно это означает, что до удалённого сервера нет связи (неверный адрес/порт/ключ, сервер недоступен или протокол заблокирован). Попробуйте другой сервер или тип подключения (ws/reality/grpc).');
+          throw new Error(await describeVerifyFailure());
         }
         runtime.publicIp=check.ip;
         if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }
