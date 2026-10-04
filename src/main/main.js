@@ -1,17 +1,19 @@
-import { app, BrowserWindow, dialog } from 'electron';
+import { app, BrowserWindow, dialog, Tray, Menu, nativeImage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { registerIpc, setWindow, initAfterReady } from './ipc.js';
+import { registerIpc, setWindow, initAfterReady, initProxyAfterReady } from './ipc.js';
 import { runner } from './runner.js';
 import { getConfig, saveConfig } from './config.js';
 import { TgProxyManager } from './tgProxy.js';
+import { shutdown as shutdownProxy } from './proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes('--smoke');
-const BUILD = 'm1.3.4';
+const BUILD = 'm1.4.9';
 let tgProxyProcess = null;
+let tray = null;
 
 // имя приложения для диспетчера задач и панели задач Windows
 app.setName('Zapret Launcher');
@@ -51,6 +53,22 @@ if (!app.requestSingleInstanceLock()) {
       w.focus();
     }
   });
+}
+
+
+function createTray() {
+  try {
+    const icon = nativeImage.createFromPath(path.join(__dirname, '..', '..', 'build', 'icon.png'));
+    tray = new Tray(icon);
+    const menu = Menu.buildFromTemplate([
+      { label: 'Открыть Zapret Launcher', click: () => { const w=BrowserWindow.getAllWindows()[0]; if (w) { if(w.isMinimized()) w.restore(); w.show(); w.focus(); } } },
+      { label: 'Запустить прокси', click: () => import('./proxy.js').then(m=>m.start()).catch(()=>{}) },
+      { label: 'Остановить прокси', click: () => import('./proxy.js').then(m=>m.stop()).catch(()=>{}) },
+      { type: 'separator' },
+      { label: 'Выход', click: () => app.quit() }
+    ]);
+    tray.setToolTip('Zapret Launcher'); tray.setContextMenu(menu); tray.on('double-click', ()=>{ const w=BrowserWindow.getAllWindows()[0]; w?.show(); w?.focus(); });
+  } catch (e) { console.warn('[tray]', e?.message || e); }
 }
 
 function createWindow() {
@@ -147,7 +165,9 @@ app.whenReady().then(() => {
   }
   registerIpc();
   initAfterReady();
+  initProxyAfterReady();
   createWindow();
+  createTray();
   const cfg = getConfig();
   if (cfg.tgAutoStart) {
     try {
@@ -171,6 +191,7 @@ app.on('will-quit', () => {
 
 // Закрываем запущенные батники вместе с приложением (настройка closeScriptsOnExit)
 app.on('before-quit', () => {
+  try { shutdownProxy().catch(()=>{}); } catch {}
   if (getConfig().closeScriptsOnExit !== false) runner.stopAllSync();
   if (getConfig().tgAutoStart && tgProxyProcess) {
     try { tgProxyProcess.stop(); } catch {}

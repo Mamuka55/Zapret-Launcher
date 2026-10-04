@@ -53,7 +53,7 @@ test('TG Proxy is below favorites and controls are settings-only', () => {
   assert.equal(mainBeforeSettings.includes('id="btnTgToggle"'), false);
   assert.equal(mainBeforeSettings.includes('id="btnTgInstall"'), false);
   assert.equal(mainBeforeSettings.includes('id="btnTgCheck"'), false);
-  assert.match(html, /<h2 class="sec-title"><span class="tg-title-icon">TG<\/span> TG Proxy<\/h2>/);
+  assert.match(html, /<h2 class="sec-title collapsible-head" data-collapse-target="tg"><span class="tg-title-icon">TG<\/span> TG Proxy/);
 });
 
 test('default download path uses Documents\\Zapret Launcher\\', () => {
@@ -137,3 +137,61 @@ test('hosts transport has HTTPS and curl fallback without relying on fetch()', (
   assert.doesNotMatch(js, /await\s+fetch\(rawUrl\(repo, 'hosts'/);
 });
 
+
+
+test('VPN main screen contains only subscription input plus icon controls; technical controls are in settings', () => {
+  const html = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
+  const main = html.split('<div id="settings"')[0];
+  assert.ok(main.includes('id="vpnSection"'));
+  assert.ok(main.includes('id="vpnSubInput"'));
+  assert.ok(main.includes('id="btnVpnPingAll"'));
+  assert.ok(main.includes('id="btnVpnRefreshAll"'));
+  assert.doesNotMatch(main, /id="vpnServerInput"/);
+  assert.doesNotMatch(main, /id="btnVpnAddServer"/);
+  assert.doesNotMatch(main, /id="btnVpnAddSub"/);
+  assert.doesNotMatch(main, /id="btnVpnToggle"/);
+  assert.doesNotMatch(main, /id="btnVpnImportFile"/);
+  assert.match(html, /data-tab="proxy"/);
+  assert.match(html, /id="page-proxy"/);
+});
+
+test('VPN tiles expose name, ping and protocol information', () => {
+  const app = fs.readFileSync(path.join(root, 'src/renderer/app.js'), 'utf8');
+  assert.match(app, /function vpnProtocolTags\(s\)/);
+  assert.match(app, /vpn-server-name/);
+  assert.match(app, /vpn-protocols/);
+  assert.match(app, /vpn-ping/);
+  assert.match(app, /window\.api\.proxyToggleServer\(serverRow\.dataset\.proxyId\)/);
+});
+
+
+
+test('VPN category matches the compact TG-style section and subscription is Enter-only', () => {
+  const html = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'src/renderer/app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'src/renderer/styles.css'), 'utf8');
+  assert.match(html, /id="vpnSection" class="vpn-section category-section collapsible-section"/);
+  assert.match(html, /class="tg-title-icon vpn-title-icon">VPN<\/span>/);
+  assert.match(html, /placeholder="Вставьте ссылку VPN-подписки и нажмите Enter/);
+  assert.doesNotMatch(html, /id="btnVpnAddSub"/);
+  assert.doesNotMatch(app, /btnVpnAddSub/);
+  assert.match(app, /e\.key === 'Enter'.*#vpnSubInput/);
+  assert.match(css, /\.vpn-sub-input\{[\s\S]*background:linear-gradient/);
+});
+
+test('VPN subscription has Windows curl fallback for transient HTTP 502/503/504', () => {
+  const proxy = fs.readFileSync(path.join(root, 'src/main/proxy.js'), 'utf8');
+  assert.match(proxy, /async function requestTextWithCurl\(/);
+  assert.match(proxy, /curl\.exe/);
+  assert.match(proxy, /--retry/);
+  assert.match(proxy, /HTTP \(\?:502\|503\|504\)/);
+});
+
+
+test('VPN parser contains native Xray JSON outbound support', () => {
+  const proxy = fs.readFileSync(path.join(root, 'src/main/proxy.js'), 'utf8');
+  assert.match(proxy, /function convertXrayOutboundObject\(/);
+  assert.match(proxy, /vnext0/);
+  assert.match(proxy, /streamSettings/);
+  assert.match(proxy, /realitySettings/);
+});

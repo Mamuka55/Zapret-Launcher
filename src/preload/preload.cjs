@@ -5,7 +5,7 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('api', {
   // маркер сборки preload-слоя (для самодиагностики «старых файлов»)
-  build: 'p1.3.3',
+  build: 'p1.4.9',
 
   // окно
   minimize: () => ipcRenderer.send('win:minimize'),
@@ -75,6 +75,38 @@ contextBridge.exposeInMainWorld('api', {
 
   // система
   sysInfo: () => invoke('sys:info'),
+
+
+  // proxy / VPN center
+  proxyStatus: () => invoke('proxy:status'),
+  proxySettings: () => invoke('proxy:settings'),
+  proxySetSettings: (patch) => invoke('proxy:setSettings', patch),
+  proxyServers: () => invoke('proxy:servers'),
+  proxyAddServer: (value) => invoke('proxy:addServer', value),
+  proxyDeleteServer: (id) => invoke('proxy:deleteServer', id),
+  proxySelectServer: (id) => invoke('proxy:selectServer', id),
+  proxyToggleServer: (id) => invoke('proxy:toggleServer', id),
+  proxyRenameServer: (id, name) => invoke('proxy:updateServer', { id, patch: { name } }),
+  proxyFavoriteServer: (id) => invoke('proxy:favoriteServer', id),
+  proxyPing: (id) => invoke('proxy:ping', id),
+  proxyPingAll: () => invoke('proxy:pingAll'),
+  proxyPingSubscription: (id) => invoke('proxy:pingSubscription', id),
+  proxyStart: (opts) => invoke('proxy:start', opts),
+  proxyStop: () => invoke('proxy:stop'),
+  proxySubscriptions: () => invoke('proxy:subscriptions'),
+  proxyAddSubscription: (url, name) => invoke('proxy:addSubscription', { url, name }),
+  proxyRefreshSubscription: (id) => invoke('proxy:refreshSubscription', id),
+  proxyRefreshAll: () => invoke('proxy:refreshAll'),
+  proxyDeleteSubscription: (id) => invoke('proxy:deleteSubscription', id),
+  proxyRoutes: () => invoke('proxy:routes'),
+  proxyAddRoute: (route) => invoke('proxy:addRoute', route),
+  proxyDeleteRoute: (id) => invoke('proxy:deleteRoute', id),
+  proxySetRoute: (id) => invoke('proxy:setRoute', id),
+  proxyImportJson: (raw) => invoke('proxy:importJson', raw),
+  proxyImportWireguard: (raw) => invoke('proxy:importWireguard', raw),
+  proxyPickFile: () => invoke('proxy:pickFile'),
+  proxyCores: () => invoke('proxy:cores'),
+  onProxyState: (cb) => ipcRenderer.on('evt:proxy-state', (_e, p) => cb(p)),
 
   // события из основного процесса
   onState: (cb) => ipcRenderer.on('evt:state', (_e, p) => cb(p)),

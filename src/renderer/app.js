@@ -8,8 +8,8 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
 // маркер сборки рендера: виден в бейдже шапки (самодиагностика старых файлов)
-const RENDERER_BUILD = 'r1.3.3';
-const EXPECT_BUILD = { m: 'm1.3.3', r: 'r1.3.3', p: 'p1.3.3', h: 'h1.3.3' };
+const RENDERER_BUILD = 'r1.4.9';
+const EXPECT_BUILD = { m: 'm1.4.9', r: 'r1.4.9', p: 'p1.4.9', h: 'h1.4.9' };
 const BUILD_LABEL = { m: 'src/main', r: 'app.js', p: 'preload.cjs', h: 'index.html' };
 
 // любую ошибку UI — в тост, чтобы «тихие» падения больше не были невидимыми
@@ -30,12 +30,14 @@ const state = {
   update: null,
   conflicts: [],
   busy: false,
+  proxyPingBusy: false,
   svcBats: [],
   tg: { installed: false, running: false, version: null },
   tgUpdate: null,
   appUpdate: null,
   theme: { accent: '#ff2e4c', background: '#14161b' },
-  setupPromptDismissed: false
+  setupPromptDismissed: false,
+  proxy: { running: false, mode: 'proxy', selected: null, servers: [], subscriptions: [], routes: [], settings: {}, cores: [] }
 };
 
 /* ==================== Тосты ==================== */
@@ -69,11 +71,18 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+function renderFavorites() {
+  const favBats = state.bats.filter((b) => state.favorites.has(b.name));
+  const favVpn = (state.proxy.servers || []).filter((s) => !!s.favorite);
+  $('#favGrid').innerHTML = [...favBats.map(tileHtml), ...favVpn.map(vpnServerTileHtml)].join('');
+  const favSection=$('#favSection');
+  favSection.classList.toggle('hidden', favBats.length === 0 && favVpn.length === 0);
+  if (!favSection.classList.contains('hidden')) favSection.classList.toggle('collapsed', localStorage.getItem('zl:collapse:favorites')==='1');
+}
+
 function renderBats() {
-  const favs = state.bats.filter((b) => state.favorites.has(b.name));
   const regular = state.bats.filter((b) => !state.favorites.has(b.name));
-  $('#favGrid').innerHTML = favs.map(tileHtml).join('');
-  $('#favSection').classList.toggle('hidden', favs.length === 0);
+  renderFavorites();
   $('#batsGrid').innerHTML = regular.map(tileHtml).join('');
 
   const missingZapret = state.bats.length === 0;
@@ -390,6 +399,8 @@ async function refreshSettings() {
     const files = fk.files || [];
     $('#fkFile').innerHTML = files.map((f) => `<option value="${esc(f.file)}">${esc(f.name)}</option>`).join('') || '<option>— нет .bin —</option>';
   } catch { /* демо */ }
+
+  try { renderProxyState(await window.api.proxyStatus()); } catch {}
 }
 
 function setKv(sel, val) {
@@ -471,6 +482,202 @@ function renderTgProgress(p) {
   wrap.classList.remove('hidden'); bar.style.width = `${Math.min(100, p.percent)}%`;
 }
 
+
+/* ==================== Proxy Center ==================== */
+
+const COUNTRY_ALIASES = {
+  ru:['ru','россия','russia','россий'], ua:['ua','украина','ukraine','украин'], de:['de','германия','germany','german','немец'], nl:['nl','нидерланды','netherlands','holland','голланд'], fi:['fi','финляндия','finland'], se:['se','швеция','sweden'], no:['no','норвегия','norway'], dk:['dk','дания','denmark'], pl:['pl','польша','poland'], cz:['cz','чехия','czech','czechia'], fr:['fr','франция','france'], gb:['gb','uk','англия','великобритания','united kingdom','britain'], us:['us','сша','usa','united states','america'], ca:['ca','канада','canada'], tr:['tr','турция','turkey'], ge:['ge','грузия','georgia'], kz:['kz','казахстан','kazakhstan'], am:['am','армения','armenia'], by:['by','беларусь','belarus'], lt:['lt','литва','lithuania'], lv:['lv','латвия','latvia'], ee:['ee','эстония','estonia','estonia'], ch:['ch','швейцария','switzerland'], at:['at','австрия','austria'], es:['es','испания','spain'], it:['it','италия','italy'], jp:['jp','япония','japan'], sg:['sg','сингапур','singapore'], hk:['hk','гонконг','hong kong'], ae:['ae','оаэ','uae','emirates'], il:['il','израиль','israel'], in:['in','индия','india'], kr:['kr','корея','south korea','korea'], au:['au','австралия','australia'], br:['br','бразилия','brazil']
+};
+function countryCodeToFlag(code){
+  const c=String(code||'').toLowerCase().replace(/^uk$/,'gb');
+  if(!/^[a-z]{2}$/.test(c))return '';
+  return [...c.toUpperCase()].map(ch=>String.fromCodePoint(0x1F1E6+ch.charCodeAt(0)-65)).join('');
+}
+function escapeRegex(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+function normalizeFlagValue(value){
+  const v=String(value||'').trim();
+  if(!v) return '';
+  if(/^[a-z]{2}$/i.test(v)) return countryCodeToFlag(v);
+  const pair=[...v].filter(ch => { const cp=ch.codePointAt(0); return cp>=0x1F1E6 && cp<=0x1F1FF; });
+  return pair.length>=2 ? pair.slice(0,2).join('') : v;
+}
+const COUNTRY_NAMES={ru:'Россия',ua:'Украина',de:'Германия',nl:'Нидерланды',fi:'Финляндия',se:'Швеция',no:'Норвегия',dk:'Дания',pl:'Польша',cz:'Чехия',fr:'Франция',gb:'Великобритания',us:'США',ca:'Канада',tr:'Турция',ge:'Грузия',kz:'Казахстан',am:'Армения',by:'Беларусь',lt:'Литва',lv:'Латвия',ee:'Эстония',ch:'Швейцария',at:'Австрия',es:'Испания',it:'Италия',jp:'Япония',sg:'Сингапур',hk:'Гонконг',ae:'ОАЭ',il:'Израиль',in:'Индия',kr:'Южная Корея',au:'Австралия',br:'Бразилия'};
+function countryCodeFromServer(s){
+  const explicit=String(s?.countryCode||s?.country||'').trim();
+  if(/^[a-z]{2}$/i.test(explicit)) return explicit.toLowerCase().replace(/^uk$/,'gb');
+  const text=`${s?.name||''} ${s?.remarks||''} ${s?.tag||''} ${s?.country||''} ${s?.countryCode||''}`.toLowerCase();
+  for(const [code,aliases] of Object.entries(COUNTRY_ALIASES)) for(const alias of aliases){
+    if(new RegExp(`(?:^|[\\s\\[\\]()._-])${escapeRegex(alias)}(?:$|[\\s\\[\\]()._-])`,'i').test(text)) return code;
+  }
+  const host=String(s?.address||'').toLowerCase();
+  const labels=host.split('.');
+  for(const label of labels.slice(0,2)){
+    const m=label.match(/^(ru|ua|de|nl|fi|se|no|dk|pl|cz|fr|gb|uk|us|ca|tr|ge|kz|am|by|lt|lv|ee|ch|at|es|it|jp|sg|hk|ae|il|in|kr|au|br)(?:\d+)?$/i);
+    if(m) return m[1].toLowerCase().replace(/^uk$/,'gb');
+  }
+  const suffix=host.match(/\.([a-z]{2})(?::\d+)?$/i);
+  return suffix ? suffix[1].toLowerCase().replace(/^uk$/,'gb') : '';
+}
+const COUNTRY_FLAG_CODES = new Set([
+  'ru','ua','de','nl','fi','se','no','dk','pl','cz','fr','gb','us','ca','tr','ge','kz','am','by','lt','lv','ee','ch','at','es','it','jp','sg','hk','ae','il','in','kr','au','br','be','hu','ie','ro','nz'
+]);
+function vpnServerFlagCode(s){
+  const code=countryCodeFromServer(s);
+  if(code && COUNTRY_FLAG_CODES.has(code)) return code;
+  const raw=String(s?.flag||s?.countryFlag||'').trim().toLowerCase();
+  if(/^[a-z]{2}$/.test(raw) && COUNTRY_FLAG_CODES.has(raw)) return raw;
+  return '';
+}
+function vpnServerFlag(s){
+  const code=vpnServerFlagCode(s);
+  if(!code) return '';
+  const label=COUNTRY_NAMES[code]||code.toUpperCase();
+  // Local SVG assets are used instead of Unicode regional-indicator glyphs,
+  // because Electron/Windows may render those glyphs as plain NL/US letters.
+  return `<img class="vpn-flag-img" src="assets/flags/${code}.svg" alt="${esc(label)}" title="${esc(label)}" loading="eager" draggable="false">`;
+}
+const GENERIC_RENDER_NAMES=new Set(['proxy','vpn','server','vless','vmess','trojan','shadowsocks','ss','socks','socks5','http','hysteria2','hy2','wireguard','wg','direct','block','ru','ua','de','nl','fi','se','no','dk','pl','cz','fr','gb','uk','us','ca','tr','ge','kz','am','by','lt','lv','ee','ch','at','es','it','jp','sg','hk','ae','il','in','kr','au','br']);
+function vpnServerDisplayName(s){
+  const n=String(s?.name||s?.remarks||s?.tag||'').trim();
+  const address=String(s?.address||'').trim();
+  const code=countryCodeFromServer(s);
+  const country=COUNTRY_NAMES[code]||'';
+  if(n && /^[a-z]{2}$/i.test(n)) return country || n.toUpperCase();
+  if(n && !GENERIC_RENDER_NAMES.has(n.toLowerCase()) && n.toLowerCase()!==address.toLowerCase() && !/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i.test(n)) return n;
+  // Не показываем технический домен как название. Для sg.dertux.com получаем «Сингапур».
+  if(country) return country;
+  if(n && !/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i.test(n) && !GENERIC_RENDER_NAMES.has(n.toLowerCase())) return n;
+  return 'VPN сервер';
+}
+function proxyServerLabel(s) {
+  return `${String(s.protocol || '').toUpperCase().replace('SHADOWSOCKS','SS')} · ${s.address || '—'}:${s.port || '—'}`;
+}
+function vpnProtocolTags(s){
+  const tags=[];
+  const p=String(s.protocol||'').toUpperCase().replace('SHADOWSOCKS','SS');
+  if(p) tags.push(p);
+  if(s.security && String(s.security).toLowerCase()==='reality') tags.push('Reality');
+  else if(s.security && String(s.security).toLowerCase()==='tls') tags.push('TLS');
+  const n=String(s.network||'').toLowerCase();
+  if(n && n!=='tcp' && !tags.includes(n.toUpperCase())) tags.push(n.toUpperCase());
+  return tags;
+}
+function vpnServerTileHtml(s) {
+  const active=!!state.proxy.running && state.proxy.selected?.id===s.id;
+  const running=active;
+  const ping=s.latency==null?'Пинг —':`${s.latency} ms`;
+  const tags=vpnProtocolTags(s);
+  const flag=vpnServerFlag(s);
+  const displayName=vpnServerDisplayName(s);
+  return `<article class="vpn-server-tile ${active?'active':''} ${running?'running':''}" data-proxy-id="${esc(s.id)}">
+    <div class="vpn-tile-top">
+      <div class="vpn-tile-icon"><svg viewBox="0 0 24 24"><path d="M12 2 4.5 5.5V11c0 5.1 3.1 9.4 7.5 11 4.4-1.6 7.5-5.9 7.5-11V5.5L12 2z"/><path d="m9 12 2 2 4-4"/></svg></div>
+      ${flag?`<span class="vpn-flag" aria-label="${esc(COUNTRY_NAMES[vpnServerFlagCode(s)]||'Страна сервера')}">${flag}</span>`:''}
+    </div>
+    <button class="vpn-star" data-proxy-fav="${esc(s.id)}" title="Избранное">${s.favorite?'★':'☆'}</button>
+    <div class="vpn-server-name" title="${esc(displayName)}">${esc(displayName)}</div>
+    <div class="vpn-server-host">${esc(s.address || '—')}${s.port?`:${esc(s.port)}`:''}</div>
+    <div class="vpn-protocols">${tags.map(x=>`<span>${esc(x)}</span>`).join('')}</div>
+    <div class="vpn-tile-footer"><span class="vpn-ping ${s.latency!=null&&s.latency<180?'good':s.latency!=null?'bad':''}">${esc(ping)}</span><span class="vpn-state">${running?'Подключено':'Готов'}</span><button class="vpn-delete" data-proxy-del="${esc(s.id)}" title="Удалить сервер">×</button></div>
+  </article>`;
+}
+function renderVpnServers(){
+  const grid=$('#vpnServerGrid'); if(!grid)return;
+  const subs=state.proxy.subscriptions||[];
+  const servers=state.proxy.servers||[];
+  const groups=[];
+  for(const sub of subs){
+    const list=servers.filter(s=>s.subscriptionId===sub.id);
+    if(!list.length) continue;
+    const collapsed=localStorage.getItem(`zl:vpn:sub:${sub.id}`)==='1';
+    groups.push(`<section class="vpn-sub-group ${collapsed?'collapsed':''}" data-subscription-id="${esc(sub.id)}"><header class="vpn-sub-head collapsible-head" data-collapse-target="sub:${esc(sub.id)}"><div class="vpn-sub-heading"><span class="vpn-sub-icon">⌁</span><div><div class="vpn-sub-title">${esc(sub.name||sub.profileTitle||'Подписка')}</div><div class="vpn-sub-meta">${list.length} сервер${list.length===1?'':'а'}</div></div></div><div class="vpn-sub-actions"><button class="icon-btn vpn-sub-ping" data-proxy-sub-ping="${esc(sub.id)}" title="Проверить пинг этой подписки" aria-label="Проверить пинг подписки">${ICON_BOLT}</button><button class="icon-btn vpn-sub-refresh" data-proxy-sub-refresh="${esc(sub.id)}" title="Обновить подписку" aria-label="Обновить подписку">↻</button><button class="icon-btn danger vpn-sub-del" data-proxy-sub-del="${esc(sub.id)}" title="Удалить подписку" aria-label="Удалить подписку">×</button><button class="icon-btn vpn-sub-collapse" type="button" title="Свернуть/развернуть" aria-label="Свернуть/развернуть">⌄</button></div></header><div class="vpn-sub-content" data-collapse-content="sub:${esc(sub.id)}"><div class="vpn-grid">${list.map(vpnServerTileHtml).join('')}</div></div></section>`);
+  }
+  const manual=servers.filter(s=>!s.subscriptionId);
+  if(manual.length) groups.push(`<section class="vpn-sub-group"><header class="vpn-sub-head"><div><div class="vpn-sub-title">Добавленные серверы</div><div class="vpn-sub-meta">${manual.length} сервер${manual.length===1?'':'а'}</div></div></header><div class="vpn-grid">${manual.map(vpnServerTileHtml).join('')}</div></section>`);
+  grid.innerHTML=groups.join('');
+}
+function renderProxyServers(){ renderVpnServers(); }
+function renderProxySubscriptions(){
+  const list=state.proxy.subscriptions||[]; const cnt=$('#proxySubCount'); if(cnt)cnt.textContent=`${list.length}`; const el=$('#proxySubList'); if(!el)return;
+  el.innerHTML=list.length?list.map(s=>`<div class="proxy-sub-row" data-proxy-sub="${esc(s.id)}"><div class="proxy-server-info"><div class="proxy-server-name">${esc(s.name)}</div><div class="proxy-server-meta">${s.count||0} серверов · ${s.updatedAt?'обновлено '+new Date(s.updatedAt).toLocaleString():'ещё не обновлялась'}${s.error?' · '+esc(s.error):''}</div></div><div class="proxy-row-actions"><button class="proxy-mini proxy-sub-refresh" data-proxy-sub-refresh="${esc(s.id)}" title="Обновить">↻</button><button class="proxy-mini proxy-sub-del" data-proxy-sub-del="${esc(s.id)}" title="Удалить">×</button></div></div>`).join(''):'<div class="hint">Подписок пока нет.</div>';
+}
+
+function renderProxyState(p = state.proxy) {
+  const px=p||state.proxy||{}; state.proxy={...state.proxy,...px}; const selected=px.selected||(px.servers||[]).find(s=>s.id===px.settings?.activeServerId); const running=!!px.running; const lat=selected?.latency!=null?`${selected.latency} ms`:'—';
+  const statusText=running?(px.mode==='tun'?'TUN подключён':'Прокси подключён'):'Остановлен';
+  ['#vpnSectionStatus','#proxyQuickStatus','#proxySettingsStatus'].forEach(sel=>{const el=$(sel);if(el){el.textContent=statusText;el.classList.toggle('on',running);}});
+  ['#proxyQuickSelected','#proxyHeroServer'].forEach(sel=>{const el=$(sel);if(el)el.textContent=selected?.name||'Сервер не выбран';});
+  ['#proxyQuickLatency','#proxyHeroLatency'].forEach(sel=>{const el=$(sel);if(el)el.textContent=lat;});
+  const meta=$('#proxyHeroMeta'); if(meta)meta.textContent=selected?`${proxyServerLabel(selected)} · ${px.mode==='tun'?'TUN':'системный прокси'}`:'Добавьте подписку или сервер в категории VPN.';
+  const mode=$('#proxyQuickMode'); if(mode)mode.textContent=px.mode==='tun'?'TUN — весь трафик':'Системный прокси';
+  renderProxyServers(); renderProxySubscriptions(); renderProxyRoutes(); renderProxyCores(); renderFavorites();
+}
+
+function renderProxyRoutes(){
+  const routes=state.proxy.routes||[]; const sel=$('#proxyRouteSelect'); if(!sel)return;
+  sel.innerHTML=routes.map(r=>`<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
+  if(state.proxy.settings?.routeProfile)sel.value=state.proxy.settings.routeProfile;
+}
+function renderProxyCores(){
+  const c=state.proxy.cores||[]; const x=c.find(v=>v.name==='xray'); const s=c.find(v=>v.name==='sing-box');
+  if($('#proxyXrayCore'))$('#proxyXrayCore').textContent=x?.installed?'установлен':'будет скачан при первом подключении';
+  if($('#proxySingCore'))$('#proxySingCore').textContent=s?.installed?'установлен':'будет скачан при первом подключении';
+}
+async function loadProxy(){
+  try{
+    const p=await window.api.proxyStatus(); state.proxy=p;
+    state.proxy.cores=await window.api.proxyCores();
+    renderProxyState(p);
+    const ps=p.settings||{};
+    const map={proxyMode:ps.mode,proxySocksPort:ps.socksPort,proxyHttpPort:ps.httpPort,proxySystemProxy:ps.systemProxy,proxyMtu:ps.mtu,proxyTunCore:ps.tunCore,proxyTunName:ps.tunName,proxySocksAuthMode:ps.socksAuthMode,proxyHttpAuthMode:ps.httpAuthMode,proxyResolveEnable:ps.serverResolveEnable,proxyResolveDnsIp:ps.serverResolveDnsIp,proxyPingType:ps.pingType,proxyPingUrl:ps.pingUrl,proxySubAutoUpdate:ps.subscriptionAutoUpdate,proxySubInterval:ps.subscriptionUpdateIntervalHours,proxySubUserAgent:ps.subscriptionUserAgent,proxySubPingOnOpen:ps.subscriptionPingOnOpen,proxySubAutoconnect:ps.subscriptionAutoconnect};
+    for(const [id,v] of Object.entries(map)){const el=$('#'+id);if(!el)continue;if(el.type==='checkbox')el.checked=!!v;else if(v!=null)el.value=v;}
+    const dns=$('#proxyDns'); if(dns && Array.isArray(ps.dns)){const val=ps.dns.join(','); if([...dns.options].some(o=>o.value===val))dns.value=val;}
+  }catch(e){console.warn('[proxy-ui]',e)}
+}
+function syncProxySettings(){
+  return window.api.proxySetSettings({
+    mode:$('#proxyMode')?.value || state.proxy.settings?.mode || 'proxy',
+    socksPort:Number($('#proxySocksPort')?.value||10808),
+    httpPort:Number($('#proxyHttpPort')?.value||10809),
+    systemProxy:!!$('#proxySystemProxy')?.checked,
+    mtu:Number($('#proxyMtu')?.value||1500),
+    tunCore:$('#proxyTunCore')?.value || 'singbox',
+    tunName:($('#proxyTunName')?.value||'EpicTunnel').trim() || 'EpicTunnel',
+    socksAuthMode:$('#proxySocksAuthMode')?.value || 'disable',
+    httpAuthMode:$('#proxyHttpAuthMode')?.value || 'disable',
+    serverResolveEnable:!!$('#proxyResolveEnable')?.checked,
+    serverResolveDnsIp:($('#proxyResolveDnsIp')?.value||'1.1.1.1').trim(),
+    pingType:$('#proxyPingType')?.value || 'tcp',
+    pingUrl:($('#proxyPingUrl')?.value||'https://cp.cloudflare.com/generate_204').trim(),
+    subscriptionAutoUpdate:!!$('#proxySubAutoUpdate')?.checked,
+    subscriptionUpdateIntervalHours:Number($('#proxySubInterval')?.value||6),
+    subscriptionUserAgent:($('#proxySubUserAgent')?.value||'').trim(),
+    subscriptionPingOnOpen:!!$('#proxySubPingOnOpen')?.checked,
+    subscriptionAutoconnect:$('#proxySubAutoconnect')?.value || 'off',
+    dns:($('#proxyDns')?.value||'1.1.1.1,8.8.8.8').split(',').map(x=>x.trim()).filter(Boolean)
+  }).then(p=>{state.proxy.settings=p;state.proxy.mode=p.mode;renderProxyState(state.proxy);return p});
+}
+
+let confirmState = null;
+function appConfirm(title, message, confirmText='Удалить') {
+  return new Promise(resolve => {
+    confirmState = resolve;
+    const modal=$('#appConfirm');
+    if(!modal){resolve(false);return;}
+    $('#appConfirmTitle').textContent=title;
+    $('#appConfirmText').textContent=message;
+    $('#appConfirmOk').textContent=confirmText;
+    modal.classList.remove('hidden');
+    requestAnimationFrame(()=>modal.classList.add('show'));
+  });
+}
+function closeAppConfirm(result) {
+  const modal=$('#appConfirm');
+  const resolve=confirmState; confirmState=null;
+  if(modal){modal.classList.remove('show');setTimeout(()=>modal.classList.add('hidden'),140);}
+  resolve?.(!!result);
+}
+
 /* ==================== Инициализация ==================== */
 
 async function init() {
@@ -479,6 +686,12 @@ async function init() {
   $('#btnClose').onclick = () => window.api && window.api.close ? window.api.close() : window.close();
   $('#btnSettings').onclick = () => openSettings(true);
   $('#btnSettingsClose').onclick = () => openSettings(false);
+  $('#appConfirmOk')?.addEventListener('click',()=>closeAppConfirm(true));
+  $('#appConfirmCancel')?.addEventListener('click',()=>closeAppConfirm(false));
+  $('#appConfirm')?.addEventListener('click',(e)=>{if(e.target.id==='appConfirm')closeAppConfirm(false);});
+  const focusVpn = () => { $('#vpnSection')?.scrollIntoView({behavior:'smooth',block:'start'}); $('#vpnSubInput')?.focus(); };
+  $('#btnProxy').onclick = focusVpn;
+  $('#btnProxyOpen')?.addEventListener('click', focusVpn);
 
   // плитки / избранное (делегирование)
   document.addEventListener('click', async (e) => {
@@ -505,7 +718,57 @@ async function init() {
       }
     }
   });
+
+  document.addEventListener('click', async (e) => {
+    const serverRow=e.target.closest('.proxy-server-row, .vpn-server-tile');
+    const fav=e.target.closest('[data-proxy-fav]');
+    const del=e.target.closest('[data-proxy-del]');
+    const subRefresh=e.target.closest('[data-proxy-sub-refresh]');
+    const subPing=e.target.closest('[data-proxy-sub-ping]');
+    const subDel=e.target.closest('[data-proxy-sub-del]');
+    if(fav){e.stopPropagation();try{await window.api.proxyFavoriteServer(fav.dataset.proxyFav);await loadProxy();}catch(err){toast(`Избранное: ${err.message||err}`,'warn');}return;}
+    if(del){e.stopPropagation();const ok=await appConfirm('Удалить сервер?','Сервер будет удалён из VPN. Подписка не удаляется и при следующем обновлении может вернуть этот сервер.','Удалить');if(!ok)return;try{await window.api.proxyDeleteServer(del.dataset.proxyDel);await loadProxy();}catch(err){toast(err.message||err,'warn');}return;}
+    if(subPing){e.stopPropagation();if(subPing.classList.contains('busy'))return;subPing.classList.add('busy');try{await window.api.proxyPingSubscription(subPing.dataset.proxySubPing);await loadProxy();toast('Пинг подписки проверен.','ok')}catch(err){toast(`Пинг: ${err.message||err}`,'warn')}finally{subPing.classList.remove('busy')}return;}
+    if(subRefresh){e.stopPropagation();try{await window.api.proxyRefreshSubscription(subRefresh.dataset.proxySubRefresh);await loadProxy();toast('Подписка обновлена.','ok')}catch(err){toast(`Подписка: ${err.message||err}`,'warn')}return;}
+    if(subDel){e.stopPropagation();const ok=await appConfirm('Удалить подписку?','Все серверы этой подписки будут удалены из VPN.','Удалить подписку');if(!ok)return;try{await window.api.proxyDeleteSubscription(subDel.dataset.proxySubDel);await loadProxy();toast('Подписка удалена.','ok')}catch(err){toast(err.message||err,'warn')}return;}
+    if(serverRow){try{await window.api.proxyToggleServer(serverRow.dataset.proxyId);await loadProxy();}catch(err){toast(`VPN: ${err.message||err}`,'warn')}return;}
+  });
+  const addSubscriptionFromInput=async()=>{const input=$('#vpnSubInput');const url=(input?.value||'').trim();if(!url)return;try{if(!/^https?:\/\//i.test(url))throw new Error('Нужна ссылка подписки http:// или https://');await window.api.proxyAddSubscription(url,'');input.value='';await loadProxy();toast('Подписка добавлена и обновлена.','ok')}catch(e){toast(`Подписка: ${e.message||e}`,'warn',9000)}};
+  $('#btnVpnImportFile')?.addEventListener('click',async()=>{try{const raw=await window.api.proxyPickFile();if(!raw)return;const t=raw.trim();if(/^\s*(?:\{|\[)/.test(t)){const list=await window.api.proxyImportJson(t);toast(`Импортировано серверов: ${list.length}.`,'ok')}else{const item=await window.api.proxyImportWireguard(t);toast(`Импортирован ${item.name}.`,'ok')}await loadProxy()}catch(e){toast(`Импорт: ${e.message||e}`,'warn')}});
+  const refreshVpn=async()=>{try{toast('Обновляю подписки…');await window.api.proxyRefreshAll();await loadProxy();toast('Подписки обновлены.','ok')}catch(e){toast(`Обновление: ${e.message||e}`,'warn')}};
+  const pingVpn=async()=>{if(state.proxyPingBusy)return;state.proxyPingBusy=true;$('#btnVpnPingAll')?.classList.add('busy');try{toast('Проверяю пинг серверов…');await window.api.proxyPingAll();await loadProxy();toast('Проверка пинга завершена.','ok')}catch(e){toast(`Пинг: ${e.message||e}`,'warn')}finally{state.proxyPingBusy=false;$('#btnVpnPingAll')?.classList.remove('busy')}};
+  $('#btnVpnRefreshAll').onclick=refreshVpn; $('#btnVpnPingAll').onclick=pingVpn;
+  $('#btnProxyRouteApply')?.addEventListener('click',async()=>{try{const id=$('#proxyRouteSelect').value;await window.api.proxySetRoute(id);await syncProxySettings();toast('Профиль маршрутизации применён.','ok')}catch(e){toast(`Маршрутизация: ${e.message||e}`,'warn')}});
+  ['#proxyMode','#proxySocksPort','#proxyHttpPort','#proxySystemProxy','#proxyMtu','#proxyDns','#proxyTunCore','#proxyTunName','#proxySocksAuthMode','#proxyHttpAuthMode','#proxyResolveEnable','#proxyResolveDnsIp','#proxyPingType','#proxyPingUrl','#proxySubAutoUpdate','#proxySubInterval','#proxySubUserAgent','#proxySubPingOnOpen','#proxySubAutoconnect'].forEach(sel=>{const el=$(sel);if(el)el.onchange=()=>syncProxySettings().catch(e=>toast(`Настройки Proxy: ${e.message||e}`,'warn'));});
+
+  // Сворачивание разделов приложения и отдельных VPN-подписок.
+  document.addEventListener('click', (e) => {
+    const collapseControl=e.target.closest('.section-collapse-btn,.vpn-sub-collapse');
+    const head=e.target.closest('.collapsible-head');
+    if(!head) return;
+    if(e.target.closest('button') && !collapseControl) return;
+    const key=String(head.dataset.collapseTarget||'').trim();
+    if(!key) return;
+    const group=head.closest('.vpn-sub-group');
+    const section=head.closest('.collapsible-section');
+    const target=group || section;
+    if(!target) return;
+    const collapsed=target.classList.toggle('collapsed');
+    const storageKey=key.startsWith('sub:') ? `zl:vpn:sub:${key.slice(4)}` : `zl:collapse:${key}`;
+    localStorage.setItem(storageKey, collapsed?'1':'0');
+  });
+
+  // Восстанавливаем состояние разделов после загрузки DOM.
+  $$('.collapsible-section').forEach(section=>{
+    const head=section.querySelector('.collapsible-head[data-collapse-target]');
+    if(!head) return;
+    const key=head.dataset.collapseTarget;
+    const stored=localStorage.getItem(`zl:collapse:${key}`);
+    if(stored==='1') section.classList.add('collapsed');
+  });
+
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.closest?.('#vpnSubInput')) { e.preventDefault(); addSubscriptionFromInput(); return; }
     if (e.key === 'Enter') {
       const tile = e.target.closest && e.target.closest('.tile');
       if (tile) {
@@ -513,7 +776,6 @@ async function init() {
         else onTileClick(tile);
       }
     }
-    if (e.key === 'Escape') openSettings(false);
   });
 
   // вкладки настроек
@@ -593,6 +855,7 @@ async function init() {
   $('#btnAppCheck').onclick = async () => {
     state.appUpdate = await window.api.checkAppUpdate();
     renderAppUpdate();
+  renderProxyState(state.proxy);
     toast(state.appUpdate.hasUpdate ? `Доступна версия ${state.appUpdate.remote}` : `Обновлений приложения нет.`, state.appUpdate.hasUpdate ? 'warn' : 'ok');
   };
   $('#btnAppUpdate').onclick = async () => {
@@ -600,6 +863,7 @@ async function init() {
     if (res?.ok && res?.alreadyLatest) {
       state.appUpdate = { ...(state.appUpdate || {}), hasUpdate: false, local: res.version || state.appUpdate?.local, remote: res.version || state.appUpdate?.remote };
       renderAppUpdate();
+  renderProxyState(state.proxy);
       toast(`Установлена последняя версия ${res.version || state.appUpdate?.local || ''}.`, 'ok');
     } else if (!res?.ok) {
       toast(`Не удалось обновить приложение: ${res?.error || 'ошибка'}`, 'warn');
@@ -838,6 +1102,7 @@ async function init() {
     window.api.onTgUpdate?.((p) => { state.tgUpdate = p; renderTgUpdate(); });
     window.api.onTgProgress?.((p) => renderTgProgress(p));
     window.api.onAppUpdate?.((p) => { state.appUpdate = p; renderAppUpdate(); });
+    window.api.onProxyState?.((p) => { state.proxy = p; renderProxyState(p); });
   }
 
   // загрузка данных
@@ -847,6 +1112,7 @@ async function init() {
     state.bats = await window.api.listBats();
     state.tg = await window.api.tgStatus();
     fillTgConfig(await window.api.tgGetConfig());
+    state.proxy = await window.api.proxyStatus();
   } catch {
     state.bats = [];
   }
@@ -870,6 +1136,7 @@ const stale = Object.keys(EXPECT_BUILD).filter((k) => markers[k] !== EXPECT_BUIL
   renderTg();
   renderTgUpdate();
   renderAppUpdate();
+  renderProxyState(state.proxy);
 
   // автопроверка обновлений
   if (state.cfg.autoCheckUpdates !== false && window.api && window.api.checkUpdate) {

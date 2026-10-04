@@ -12,14 +12,18 @@ import * as diag from './diagnostics.js';
 import { isAdmin, serviceState } from './util.js';
 import { defaultTgProxyDir } from './config.js';
 import { TgProxyManager } from './tgProxy.js';
+import * as proxy from './proxy.js';
 
 let win = null;
 let watcher = null;
 let updateState = { busy: false };
 let appUpdateState = { busy: false, info: null };
 let tgManager = null;
+let proxyRefreshTimer = null;
 
 export function setWindow(w) { win = w; }
+
+function notifyProxy() { send('evt:proxy-state', proxy.status()); }
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -68,6 +72,52 @@ export function registerIpc() {
     } catch {}
     send('evt:toast', { type: 'warn', text });
   });
+
+
+  // ---------- proxy / VPN center ----------
+  proxy.onState((state) => {
+    try {
+      const cfg = proxy.getSettings();
+      saveConfig({ proxyEnabled: !!state.running, proxyMode: cfg.mode || 'proxy', proxySystem: !!cfg.systemProxy, proxySocksPort: cfg.socksPort, proxyHttpPort: cfg.httpPort, proxyRoute: cfg.routeProfile });
+    } catch {}
+    notifyProxy();
+  });
+  ipcMain.handle('proxy:status', () => proxy.status());
+  ipcMain.handle('proxy:settings', () => proxy.getSettings());
+  ipcMain.handle('proxy:setSettings', (_e, patch) => {
+    const p = patch || {};
+    const result = proxy.setSettings(p);
+    saveConfig({ proxyMode: result.mode, proxySystem: result.systemProxy, proxySocksPort: result.socksPort, proxyHttpPort: result.httpPort, proxyRoute: result.routeProfile, proxyAutoRefreshHours: result.subscriptionIntervalHours });
+    return result;
+  });
+  ipcMain.handle('proxy:servers', () => proxy.getServers());
+  ipcMain.handle('proxy:addServer', (_e, value) => proxy.addServer(value));
+  ipcMain.handle('proxy:deleteServer', (_e, id) => proxy.deleteServer(id));
+  ipcMain.handle('proxy:selectServer', (_e, id) => proxy.selectServer(id));
+  ipcMain.handle('proxy:toggleServer', (_e, id) => proxy.toggleServer(id));
+  ipcMain.handle('proxy:updateServer', (_e, { id, patch }) => proxy.updateServer(id, patch));
+  ipcMain.handle('proxy:favoriteServer', (_e, id) => proxy.toggleFavoriteServer(id));
+  ipcMain.handle('proxy:ping', (_e, id) => proxy.pingServerReal(id));
+  ipcMain.handle('proxy:pingAll', () => proxy.pingAll());
+  ipcMain.handle('proxy:pingSubscription', (_e, id) => proxy.pingSubscription(id));
+  ipcMain.handle('proxy:start', (_e, opts) => proxy.start(opts || {}));
+  ipcMain.handle('proxy:stop', () => proxy.stop());
+  ipcMain.handle('proxy:subscriptions', () => proxy.getSubscriptions());
+  ipcMain.handle('proxy:addSubscription', (_e, { url, name }) => proxy.addSubscription(url, name || ''));
+  ipcMain.handle('proxy:refreshSubscription', (_e, id) => proxy.refreshSubscription(id));
+  ipcMain.handle('proxy:refreshAll', () => proxy.refreshAllSubscriptions());
+  ipcMain.handle('proxy:deleteSubscription', (_e, id) => proxy.deleteSubscription(id));
+  ipcMain.handle('proxy:routes', () => proxy.getRoutes());
+  ipcMain.handle('proxy:addRoute', (_e, route) => proxy.addRoute(route));
+  ipcMain.handle('proxy:deleteRoute', (_e, id) => proxy.deleteRoute(id));
+  ipcMain.handle('proxy:setRoute', (_e, id) => proxy.setRoute(id));
+  ipcMain.handle('proxy:importJson', (_e, raw) => proxy.importXrayJson(raw));
+  ipcMain.handle('proxy:importWireguard', (_e, raw) => proxy.importWireguardConf(raw));
+  ipcMain.handle('proxy:pickFile', async () => {
+    const res = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name:'Конфигурации', extensions:['json','conf','txt','yaml','yml'] }, { name:'Все файлы', extensions:['*'] }] });
+    return res.canceled || !res.filePaths[0] ? null : fs.readFileSync(res.filePaths[0], 'utf8');
+  });
+  ipcMain.handle('proxy:cores', () => proxy.checkCores());
 
   // ---------- окно ----------
   ipcMain.on('win:minimize', () => win?.minimize());
@@ -328,11 +378,36 @@ export function registerIpc() {
   ipcMain.handle('sys:info', async () => ({
     elevated: await isAdmin(),
     version: app.getVersion(),
-    build: 'm1.3.3',
+    build: 'm1.4.6',
     platform: process.platform
   }));
 }
 
 export function initAfterReady() {
   setupWatcher();
+}
+
+
+export async function initProxyAfterReady() {
+  try {
+    const ps = proxy.getSettings();
+    saveConfig({ proxyMode: ps.mode, proxySystem: ps.systemProxy, proxySocksPort: ps.socksPort, proxyHttpPort: ps.httpPort, proxyRoute: ps.routeProfile });
+    notifyProxy();
+    if (proxyRefreshTimer) clearInterval(proxyRefreshTimer);
+    if (ps.subscriptionAutoUpdate !== false) {
+      const hours = Math.max(1, Number(ps.subscriptionUpdateIntervalHours || ps.subscriptionIntervalHours || 6));
+      proxyRefreshTimer = setInterval(() => proxy.refreshAllSubscriptions().catch(() => {}), hours * 3600 * 1000);
+      proxy.refreshAllSubscriptions().catch(() => {});
+    }
+    if (ps.subscriptionPingOnOpen && proxy.getServers().length) proxy.pingAll().catch(() => {});
+    // Автоподключение не включается по умолчанию; пользователь управляет VPN кликом по плитке.
+    if (ps.subscriptionAutoconnect && ps.subscriptionAutoconnect !== 'off' && !proxy.status().running && proxy.getServers().length) {
+      const list=proxy.getServers().filter(s=>!s.error);
+      let target=null;
+      if(ps.subscriptionAutoconnect==='lastused') target=list.find(s=>s.id===ps.activeServerId);
+      if(ps.subscriptionAutoconnect==='lowestdelay') target=list.filter(s=>s.latency!=null).sort((a,b)=>a.latency-b.latency)[0]||list[0];
+      if(ps.subscriptionAutoconnect==='random') target=list[Math.floor(Math.random()*list.length)];
+      if(target){ proxy.selectServer(target.id); await proxy.start({mode:ps.mode}); }
+    }
+  } catch (e) { console.warn('[proxy-init]', e?.message || e); }
 }

@@ -18,7 +18,15 @@ const DEFAULTS = {
   tgAutoCheckUpdates: true,
   tgAutoStart: false,
   accentColor: '#ff2e4c',
-  backgroundColor: '#14161b'
+  backgroundColor: '#14161b',
+  proxyEnabled: false,
+  proxyMode: 'proxy',
+  proxySystem: true,
+  proxySocksPort: 10808,
+  proxyHttpPort: 10809,
+  proxyRoute: 'Global',
+  proxyAutoConnect: false,
+  proxyAutoRefreshHours: 6
 };
 
 let cache = null;

@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="zl-build" content="h1.3.3">
+  <meta name="zl-build" content="h1.4.9">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
   <title>Zapret Launcher</title>
@@ -18,6 +18,7 @@
       <span class="brand-name">Zapret Launcher</span>
     </div>
     <div class="win-controls">
+      <button class="wbtn proxy-head-btn" id="btnProxy" title="Proxy / VPN"><span class="proxy-mark">VPN</span></button>
       <button class="wbtn" id="btnSettings" title="Настройки">
         <svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
       </button>
@@ -53,17 +54,37 @@
         <span>Запуск драйвера WinDivert и установка сервиса не будут работать. Собранная версия (exe) запрашивает права один раз при старте.</span>
       </div>
     </div>
-    <section id="favSection" class="hidden">
-      <h2 class="sec-title">
+    <section id="favSection" class="hidden collapsible-section">
+      <h2 class="sec-title collapsible-head" data-collapse-target="favorites">
         <svg viewBox="0 0 24 24"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1L12 2z"/></svg>
-        Избранное
+        Избранное <button class="section-collapse-btn" type="button" title="Свернуть/развернуть">⌄</button>
       </h2>
-      <div class="grid" id="favGrid"></div>
+      <div class="grid section-content" id="favGrid"></div>
     </section>
 
-    <section id="tgSection" class="hidden">
-      <h2 class="sec-title"><span class="tg-title-icon">TG</span> TG Proxy</h2>
-      <div class="grid">
+    <section id="vpnSection" class="vpn-section category-section collapsible-section">
+      <div class="vpn-section-head">
+        <h2 class="sec-title collapsible-head" data-collapse-target="vpn"><span class="tg-title-icon vpn-title-icon">VPN</span> VPN <span class="vpn-status-pill" id="vpnSectionStatus">Остановлен</span> <button class="section-collapse-btn" type="button" title="Свернуть/развернуть">⌄</button></h2>
+        <div class="vpn-header-actions">
+          <button class="icon-btn" id="btnVpnPingAll" title="Проверить пинг всех серверов" aria-label="Проверить пинг">
+            <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z"/></svg>
+          </button>
+          <button class="icon-btn" id="btnVpnRefreshAll" title="Обновить подписки" aria-label="Обновить подписки">
+            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 2 5"/><path d="M20 4v7h-7"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="section-content vpn-section-content">
+      <div class="vpn-addbar">
+        <input id="vpnSubInput" class="vpn-sub-input" type="text" placeholder="Вставьте ссылку VPN-подписки и нажмите Enter…" autocomplete="off" spellcheck="false">
+      </div>
+      <div id="vpnServerGrid" class="vpn-grid"></div>
+      </div>
+    </section>
+
+    <section id="tgSection" class="hidden collapsible-section">
+      <h2 class="sec-title collapsible-head" data-collapse-target="tg"><span class="tg-title-icon">TG</span> TG Proxy <button class="section-collapse-btn" type="button" title="Свернуть/развернуть">⌄</button></h2>
+      <div class="grid section-content">
         <div class="tile tg-tile" id="tgTile" data-name="tg-ws-proxy" role="button" tabindex="0" title="Запустить / остановить TG Proxy">
           <div class="t-icon tg-icon">TG</div>
           <div class="t-label">TG Proxy</div>
@@ -74,12 +95,12 @@
     </section>
 
 
-    <section>
-      <h2 class="sec-title" id="allTitle">
+    <section class="collapsible-section">
+      <h2 class="sec-title collapsible-head" id="allTitle" data-collapse-target="scripts">
         <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z"/></svg>
-        Скрипты обхода
+        Скрипты обхода <button class="section-collapse-btn" type="button" title="Свернуть/развернуть">⌄</button>
       </h2>
-      <div class="grid" id="batsGrid"></div>
+      <div class="grid section-content" id="batsGrid"></div>
       <div id="emptyState" class="empty hidden">
         <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
         <p>Батники не найдены.<br>Выберите папку zapret в настройках (шестерёнка) или скачайте свежий релиз с GitHub.</p>
@@ -104,6 +125,7 @@
       <div class="panel-body">
         <nav class="tabs">
           <button class="tab active" data-tab="general">Основные</button>
+          <button class="tab" data-tab="proxy">VPN</button>
           <button class="tab" data-tab="updates">Обновления</button>
           <button class="tab" data-tab="tg">TG Proxy</button>
           <button class="tab" data-tab="service">Сервис</button>
@@ -146,6 +168,66 @@
               <div class="color-row"><label>Цвет фона<input type="color" id="backgroundColor"></label><input type="text" id="backgroundHex" value="#14161b" maxlength="7"></div>
               <button class="btn ghost" id="btnResetColors">Сбросить цвета</button>
               <p class="hint">Нажатие на цвет открывает палитру Windows. Можно также указать HEX вручную.</p>
+            </div>
+          </section>
+
+          <!-- ======== Proxy / VPN ======== -->
+          <section class="page" id="page-proxy">
+            <div class="card">
+              <h3>Подключение VPN</h3>
+              <div class="row top-gap">
+                <label class="field grow">Режим<select id="proxyMode"><option value="proxy">Системный прокси</option><option value="tun">TUN — весь трафик</option></select></label>
+                <label class="field">SOCKS5<input type="number" id="proxySocksPort" min="1024" max="65535"></label>
+                <label class="field">HTTP<input type="number" id="proxyHttpPort" min="1024" max="65535"></label>
+              </div>
+              <div class="row top-gap">
+                <label class="switch"><input type="checkbox" id="proxySystemProxy"><span class="slider"></span><span class="switch-label">Автоматически включать системный прокси</span></label>
+              </div>
+              <div class="row top-gap">
+                <label class="field grow">Ядро TUN<select id="proxyTunCore"><option value="singbox">sing-box</option><option value="xray">Xray</option></select></label>
+                <label class="field grow">Имя TUN<input type="text" id="proxyTunName" maxlength="32" placeholder="EpicTunnel"></label>
+              </div>
+              <div class="row top-gap">
+                <label class="field grow">SOCKS авторизация<select id="proxySocksAuthMode"><option value="disable">Отключена</option><option value="auto">Авто</option><option value="manual">Вручную</option></select></label>
+                <label class="field grow">HTTP авторизация<select id="proxyHttpAuthMode"><option value="disable">Отключена</option><option value="auto">Авто</option><option value="manual">Вручную</option></select></label>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Маршрутизация и DNS</h3>
+              <div class="row"><label class="field grow">Профиль<select id="proxyRouteSelect"></select></label><button class="btn" id="btnProxyRouteApply">Применить</button></div>
+              <div class="row top-gap"><label class="field grow">DNS<select id="proxyDns"><option value="1.1.1.1,8.8.8.8">Cloudflare + Google</option><option value="8.8.8.8,1.1.1.1">Google + Cloudflare</option><option value="9.9.9.9,1.1.1.1">Quad9 + Cloudflare</option></select></label><label class="field"><span>MTU</span><input type="number" id="proxyMtu" min="1280" max="9000"></label></div>
+              <div class="row top-gap">
+                <label class="switch"><input type="checkbox" id="proxyResolveEnable"><span class="slider"></span><span class="switch-label">Резолвить адрес сервера через DNS</span></label>
+                <label class="field"><span>DNS для резолва</span><input type="text" id="proxyResolveDnsIp" placeholder="1.1.1.1"></label>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Проверка серверов</h3>
+              <div class="row">
+                <label class="field grow">Метод ping<select id="proxyPingType"><option value="tcp">TCP</option><option value="icmp">ICMP</option><option value="proxy">Через прокси</option></select></label>
+                <label class="field grow">URL проверки<input type="text" id="proxyPingUrl" placeholder="https://cp.cloudflare.com/generate_204"></label>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Подписки</h3>
+              <div class="row">
+                <label class="switch"><input type="checkbox" id="proxySubAutoUpdate"><span class="slider"></span><span class="switch-label">Автообновление</span></label>
+                <label class="field"><span>Интервал, ч</span><input type="number" id="proxySubInterval" min="1" max="168"></label>
+                <label class="field grow"><span>User-Agent</span><input type="text" id="proxySubUserAgent" placeholder="Оставьте пустым для авто"></label>
+              </div>
+              <div class="row top-gap">
+                <label class="switch"><input type="checkbox" id="proxySubPingOnOpen"><span class="slider"></span><span class="switch-label">Проверять серверы при открытии приложения</span></label>
+                <label class="field grow">Автовыбор<select id="proxySubAutoconnect"><option value="off">Выключен</option><option value="lastused">Последний сервер</option><option value="lowestdelay">Минимальный ping</option><option value="random">Случайный доступный</option></select></label>
+              </div>
+              <div id="proxySubList" class="proxy-list compact top-gap"></div>
+            </div>
+            <div class="card">
+              <h3>Импорт и ядра</h3>
+              <div class="row">
+                <button class="btn" id="btnVpnImportFile">Импорт JSON / WireGuard</button>
+                <div class="kv grow"><span>Xray:</span><b id="proxyXrayCore">—</b></div>
+                <div class="kv grow"><span>sing-box:</span><b id="proxySingCore">—</b></div>
+              </div>
             </div>
           </section>
 
@@ -380,6 +462,22 @@
         <button class="btn btn-red" id="btnOnboardTgInstall">Установить TG Proxy</button>
         <button class="btn" id="btnOnboardSettings">Открыть настройки</button>
         <button class="btn ghost" id="btnOnboardLater">Продолжить без установки</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="appConfirm" class="overlay centered hidden" role="dialog" aria-modal="true" aria-labelledby="appConfirmTitle">
+    <div class="confirm-card">
+      <div class="confirm-icon">
+        <svg viewBox="0 0 24 24"><path d="M6 7h12m-9 0V4h6v3m-8 0 1 14h8l1-14M10 11v6m4-6v6"/></svg>
+      </div>
+      <div class="confirm-content">
+        <h3 id="appConfirmTitle">Удалить?</h3>
+        <p id="appConfirmText"></p>
+      </div>
+      <div class="confirm-actions">
+        <button class="btn ghost" id="appConfirmCancel">Отмена</button>
+        <button class="btn btn-danger" id="appConfirmOk">Удалить</button>
       </div>
     </div>
   </div>
