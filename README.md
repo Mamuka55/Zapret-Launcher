@@ -1,6 +1,6 @@
 # 🚀 Zapret Launcher
 
-## 🏷️ v1.5.1
+## 🏷️ v1.5.7
 
 🧊 Стеклянный (red/gray glassmorphism) лаунчер проекта **zapret-discord-youtube** с единым центром управления **Zapret, Proxy/VPN и Telegram Proxy**.
 
