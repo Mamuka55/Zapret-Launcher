@@ -1,8 +1,8 @@
 {
   "name": "zapret-launcher",
   "productName": "Zapret Launcher",
-  "version": "1.4.10",
-  "description": "Zapret Launcher",
+  "version": "1.5.7",
+  "description": "Современный Windows-лаунчер для управления Zapret, VPN и TG Proxy.",
   "type": "module",
   "main": "src/main/main.js",
   "author": "zapret-launcher",
@@ -35,7 +35,7 @@
         "portable",
         "nsis"
       ],
-      "icon": "build/icon.png",
+      "icon": "build/icon.ico",
       "requestedExecutionLevel": "requireAdministrator"
     },
     "portable": {
@@ -46,6 +46,7 @@
       "allowToChangeInstallationDirectory": true,
       "artifactName": "ZapretLauncher-${version}-setup.exe",
       "shortcutName": "Zapret Launcher"
-    }
+    },
+    "icon": "build/icon.ico"
   }
 }

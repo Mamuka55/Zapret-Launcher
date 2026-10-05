@@ -20,13 +20,15 @@ const DEFAULTS = {
   accentColor: '#ff2e4c',
   backgroundColor: '#14161b',
   proxyEnabled: false,
-  proxyMode: 'proxy',
+  proxyMode: 'mixed',
   proxySystem: true,
   proxySocksPort: 10808,
   proxyHttpPort: 10809,
   proxyRoute: 'Global',
   proxyAutoConnect: false,
-  proxyAutoRefreshHours: 6
+  proxyAutoRefreshHours: 6,
+  releaseNotifications: true,
+  updateNotificationVersions: {}
 };
 
 let cache = null;

@@ -107,13 +107,13 @@ test('Windows system proxy clears stale bypass/PAC and broadcasts settings chang
 });
 
 
-test('System proxy is the default and is migrated once for legacy settings', () => {
+test('Mixed mode is the default and is migrated once for legacy settings', () => {
   const proxySrc = fs.readFileSync(new URL('../src/main/proxy.js', import.meta.url), 'utf8');
   const cfgSrc = fs.readFileSync(new URL('../src/main/config.js', import.meta.url), 'utf8');
-  assert.ok(proxySrc.includes("if (rawSettings.proxyDefaultModeVersion !== 'system-v1')"));
-  assert.ok(proxySrc.includes("settings.mode = 'proxy'"));
+  assert.ok(proxySrc.includes("if (rawSettings.proxyDefaultModeVersion !== 'mixed-v2')"));
+  assert.ok(proxySrc.includes("settings.mode = 'mixed'"));
   assert.ok(proxySrc.includes("settings.systemProxy = true"));
-  assert.ok(cfgSrc.includes("proxyMode: 'proxy'"));
+  assert.ok(cfgSrc.includes("proxyMode: 'mixed'"));
   assert.ok(cfgSrc.includes("proxySystem: true"));
 });
 
@@ -150,4 +150,24 @@ test('sing-box TUN excludes resolved upstream server IPs to prevent VLESS routin
   assert.ok(src.includes('routeExclude.length ? {route_exclude_address:routeExclude} : {}'));
   assert.ok(src.includes('dns.promises.lookup(host,{all:true,verbatim:true})'));
   assert.ok(src.includes('TUN upstream route exclusions'));
+});
+
+
+
+test('default main tab is favorites',()=>{
+  const appjs=fs.readFileSync(path.join(new URL('..',import.meta.url).pathname.replace(/^\/+/, '/'),'src/renderer/app.js'),'utf8');
+  assert.match(appjs,/setMainTab\(localStorage\.getItem\('zl:main-tab'\) \|\| 'favorites'\)/);
+});
+
+
+test('VPN launch is passive by default and release notifications cover all components', () => {
+  const proxy = fs.readFileSync(new URL('../src/main/proxy.js', import.meta.url), 'utf8');
+  const ipc = fs.readFileSync(new URL('../src/main/ipc.js', import.meta.url), 'utf8');
+  assert.match(proxy, /mode: 'mixed'/);
+  assert.match(proxy, /settings\.subscriptionAutoconnect = 'off'/);
+  assert.match(ipc, /VPN-ядро при старте приложения НЕ запускаем/);
+  assert.match(ipc, /Доступна новая версия Zapret Launcher/);
+  assert.match(ipc, /Доступна новая версия Zapret/);
+  assert.match(ipc, /Доступна новая версия TG Proxy/);
+  assert.match(ipc, /updateNotificationVersions/);
 });

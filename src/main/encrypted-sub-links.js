@@ -36,7 +36,7 @@ function requestText(url, redirects = 0) {
     if (redirects > 4) return reject(new Error('Слишком много перенаправлений при загрузке ключей'));
     const req = https.get(url, {
       family: 4,
-      headers: { 'User-Agent': 'Zapret-Launcher/1.4.10', Accept: 'text/plain,*/*' },
+      headers: { 'User-Agent': 'Zapret-Launcher/1.5.5', Accept: 'text/plain,*/*' },
       timeout: 5000
     }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {

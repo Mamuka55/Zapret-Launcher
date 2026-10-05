@@ -110,7 +110,7 @@ test('Xray config contains non-empty outbounds array (empty object meant no prox
 test('VPN health monitor disconnects when tunnel stops carrying traffic',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/function startHealthMonitor\(\)/);
-  assert.match(proxy,/consecutiveHealthFails>=3/);
+  assert.match(proxy,/consecutiveHealthFails>=5/);
   assert.match(proxy,/if\(ready\) startHealthMonitor\(\)/);
   assert.match(proxy,/stopHealthMonitor\(\);\n  await cleanupWindowsTunRoutes\(runtime\.tunIfIndex\|\|null\);\n  const proc=runtime\.proc/);
   assert.match(proxy,/publicIp:runtime\.publicIp\|\|''/);
@@ -219,7 +219,7 @@ test('sing-box 1.14+ uses current route actions and no removed sniff fields',()=
 
 test('System-proxy mode applies Windows proxy before strict remote readiness check',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
-  const applyPos=proxy.indexOf("if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }");
+  const applyPos=proxy.indexOf("if(settings.systemProxy && !runtime.systemProxyChanged){ await setWindowsSystemProxy(true, fastConnect); runtime.systemProxyChanged=true; }");
   const checkPos=proxy.search(/if\(!fastConnect\)\{[\s\S]*const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,5000\)/);
   assert.ok(applyPos>=0 && checkPos>applyPos);
   assert.match(proxy,/async function verifyOutboundViaHttpProxy\(port, timeoutMs=12000\)/);
@@ -315,6 +315,14 @@ test('sing-box TUN readiness does not require Xray-specific /1 routes',()=>{
 });
 
 
+test('Background HTTP proxy health uses HTTPS 204 endpoints, not example.com',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  const fn=proxy.slice(proxy.indexOf('async function verifyOutboundViaHttpProxy'), proxy.indexOf('// Быстрая проверка'));
+  assert.match(fn,/cp\.cloudflare\.com\/generate_204/);
+  assert.match(fn,/www\.gstatic\.com\/generate_204/);
+  assert.doesNotMatch(fn,/const targets = \[\{url:'http:\/\/example\.com\//);
+});
+
 test('VPN startup proxy readiness is non-blocking in fast mode',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/if\(!fastConnect\)\{[\s\S]*const check=await verifyOutboundViaHttpProxy\(settings\.httpPort,5000\)/);
@@ -390,7 +398,7 @@ test('Fast VPN connect avoids subscription refresh when a cached server is selec
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/Fast reconnect: a previously downloaded server is enough to start/);
   assert.match(proxy,/const fastConnect = opts\.fast !== false;/);
-  assert.match(proxy,/return start\(\{mode:settings\.mode, fast:true\}\);/);
+  assert.match(proxy,/return start\(\{mode:settings\.mode \|\| 'mixed', fast:true\}\);/);
 });
 
 
@@ -403,8 +411,8 @@ test('INCY/HAPP add wrappers are accepted as plain subscription URLs',async()=>{
 test('Fast VPN connect skips duplicate pre-flight and remote readiness checks',()=>{
   const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
   assert.match(proxy,/if\(!fastConnect\) await validateCore\(exe,configPath\)/);
-  assert.match(proxy,/if\(!fastConnect\)\{\n          const check=await verifyOutboundViaHttpProxy/);
-  assert.match(proxy,/if\(!fastConnect\)\{\n          const check=await verifyTunOutbound/);
+  assert.match(proxy,/if\(!fastConnect\)\{[\s\S]*?verifyOutboundViaHttpProxy/);
+  assert.match(proxy,/if\(!fastConnect\)\{[\s\S]*?verifyTunOutbound/);
 });
 
 test('HAPP crypt3 and v2rayTun crypt loaders support the published key layout',async()=>{
@@ -421,4 +429,62 @@ test('HAPP crypt3 and v2rayTun crypt loaders support the published key layout',a
     assert.deepEqual(await mod.decryptHappCrypt3(`happ://crypt3/${happCipher}`),{url:'https://example.com/happ',name:'',sourceType:'happ://crypt3',userAgent:'Happ/3.26.1'});
     assert.deepEqual(await mod.decryptV2RayTunCrypt(`v2raytun://crypt/${v2Cipher}`),{url:'https://example.com/v2',name:'',sourceType:'v2raytun://crypt',userAgent:'v2raytun/5.24.76 Windows/10.0'});
   } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+});
+
+
+test('Opening VPN tab does not automatically start the VPN core',()=>{
+  const app=fs.readFileSync(path.join(root,'src/renderer/app.js'),'utf8');
+  const tabStart=app.indexOf('function setMainTab(');
+  const tabEnd=app.indexOf('function bindEvents(', tabStart);
+  const block=app.slice(tabStart, tabEnd > tabStart ? tabEnd : tabStart + 12000);
+  assert.doesNotMatch(block,/proxyPrewarm\?\.\(\)/);
+  assert.match(block,/Подключение начинается только после клика по серверу/);
+});
+
+test('Fast server click respects the selected mode and prewarm is available from VPN flow',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.doesNotMatch(proxy,/settings\.mode !== 'proxy'\) return \{ok:false, skipped:true, reason:'proxy-mode-only'\}/);
+  assert.match(proxy,/return start\(\{mode:settings\.mode \|\| 'mixed', fast:true\}\);/);
+  assert.match(proxy,/process\.platform!==['"]win32['"]/);
+  assert.match(proxy,/setWindowsSystemProxy\(true, fastConnect\)/);
+});
+
+test('Windows VPN notification imports Electron Notification and shows only after connected state',()=>{
+  const ipc=fs.readFileSync(path.join(root,'src/main/ipc.js'),'utf8');
+  assert.match(ipc,/BrowserWindow, Notification/);
+  assert.match(ipc,/new Notification\(options\)/);
+  assert.match(ipc,/!previousProxyRunning && state\?\.running/);
+  assert.match(ipc,/Windows VPN connection notification shown/);
+});
+
+
+test('Startup can clear only stale Launcher-owned Windows proxy endpoints',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/clearStaleLauncherSystemProxy/);
+  assert.match(proxy,/127\.0\.0\.1:\$\{settings\.httpPort\}/);
+});
+
+
+test('REALITY subscription parser accepts canonical hyphenated reality-opts keys',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/reality\['public-key'\]/);
+  assert.match(proxy,/reality\['short-id'\]/);
+  assert.match(proxy,/reality\['spider-x'\]/);
+});
+
+test('REALITY runtime validation rejects configs without public key before startup',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  assert.match(proxy,/security === 'reality' && !String\(server\.publicKey \|\| ''\)\.trim\(\)/);
+  assert.match(proxy,/VLESS REALITY-сервер пропущен: отсутствует public key/);
+  assert.match(proxy,/validateServerForRuntime\(server\);/);
+});
+
+test('Mixed fast connect does not block startup on public HTTP health probes',()=>{
+  const proxy=fs.readFileSync(path.join(root,'src/main/proxy.js'),'utf8');
+  const block=proxy.slice(proxy.indexOf("if(mode==='mixed' && fastConnect)"), proxy.indexOf("} else {", proxy.indexOf("if(mode==='mixed' && fastConnect)")+30));
+  assert.doesNotMatch(block,/verifyOutboundViaHttpProxy\(settings\.httpPort,3200\)/);
+  assert.doesNotMatch(block,/Удалённый VPN-сервер не подтвердил соединение/);
+  const proxyEnable=block.indexOf("setWindowsSystemProxy(true,true)");
+  const localReady=block.indexOf("if(!adapter) throw new Error");
+  assert.ok(proxyEnable > localReady, 'Windows proxy must be enabled after local TUN readiness');
 });

@@ -33,7 +33,7 @@ const SINGBOX_DIR = () => path.join(CORES_DIR(), 'sing-box');
 
 const DEFAULTS = {
   enabled: false,
-  mode: 'proxy', // proxy | tun | mixed
+  mode: 'mixed', // proxy | tun | mixed
   systemProxy: true,
   socksPort: 10808,
   httpPort: 10809,
@@ -68,6 +68,8 @@ const DEFAULTS = {
 };
 
 let runtime = { proc: null, core: null, mode: 'proxy', configPath: null, systemProxyChanged: false, systemProxyOriginal: null, ready: false, trafficSeen: false };
+let warmRuntime = { proc: null, serverId: null, core: null, mode: 'proxy', configPath: null, configHash: '', ready: false };
+let prewarmPromise = null;
 let startPromise = null;
 let settings = null;
 let servers = [];
@@ -89,18 +91,48 @@ function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: 
 function normalizeName(s, fallback='Server') { return String(s || fallback).replace(/[\x00-\x1f<>:"/\\|?*]+/g, ' ').trim().slice(0, 120) || fallback; }
 function idFor(seed) { return crypto.createHash('sha1').update(seed).digest('hex').slice(0, 16); }
 
+function coreForServer(server, mode='proxy') {
+  let core = isTunMode(mode) && settings.tunCore ? settings.tunCore : server.core;
+  if (core === 'auto') core = ['hysteria2', 'wireguard'].includes(server.protocol) ? 'sing-box' : 'xray';
+  if (['hysteria2', 'wireguard'].includes(server.protocol)) core = 'sing-box';
+  return core;
+}
+
+async function stopWarmProcess() {
+  const proc = warmRuntime.proc;
+  warmRuntime = { proc: null, serverId: null, core: null, mode: 'proxy', configPath: null, configHash: '', ready: false };
+  if (!proc) return;
+  try { proc.kill(); } catch {}
+  if (process.platform === 'win32' && proc.pid) {
+    try { await execFileAsync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, timeout: 2500 }); } catch {}
+  }
+}
+
+function configHash(cfg) {
+  return crypto.createHash('sha1').update(JSON.stringify(cfg)).digest('hex');
+}
+
 function init() {
   ensureDirs();
   configureEncryptedLinkKeyCache(path.join(DATA_DIR(), 'encrypted-link-keys.json'));
   const rawSettings = readJson(path.join(DATA_DIR(), 'settings.json'), {}) || {};
   settings = { ...DEFAULTS, ...rawSettings };
-  // System proxy is the default connection mode. On upgrade from versions that
-  // predated the explicit default marker, migrate once to the requested default
-  // without changing it again after the user selects another mode.
-  if (rawSettings.proxyDefaultModeVersion !== 'system-v1') {
-    settings.mode = 'proxy';
+  // Mixed mode is the application default. On upgrade from older builds,
+  // migrate once and disable automatic VPN connection so launch never starts
+  // a saved server by itself. The first launch always starts disconnected.
+  if (rawSettings.proxyDefaultModeVersion !== 'mixed-v2') {
+    settings.mode = 'mixed';
     settings.systemProxy = true;
-    settings.proxyDefaultModeVersion = 'system-v1';
+    settings.subscriptionAutoconnect = 'off';
+    settings.enabled = false;
+    settings.proxyDefaultModeVersion = 'mixed-v2';
+  }
+  // 1.5.6 migration: even installations that already had the previous marker
+  // must receive one guaranteed passive launch after the old auto-connect builds.
+  if (rawSettings.proxyPassiveLaunchVersion !== '1.5.6') {
+    settings.enabled = false;
+    settings.subscriptionAutoconnect = 'off';
+    settings.proxyPassiveLaunchVersion = '1.5.6';
   }
   settings.mode = normalizeVpnMode(settings.mode);
   normalizeTunSettings(settings);
@@ -133,10 +165,12 @@ function save() {
 export function getSettings() { if (!settings) init(); return structuredClone(settings); }
 export function setSettings(patch = {}) {
   if (!settings) init();
+  const hadWarmConfigChange = Object.keys(patch || {}).some(k => ['mode','socksPort','httpPort','tunCore','tunName','mtu','dns','routeProfile','socksAuthMode','socksAuthUser','socksAuthPassword','httpAuthMode','httpAuthUser','httpAuthPassword','serverResolveEnable','serverResolveDnsIp'].includes(k));
   settings = { ...settings, ...patch };
   settings.mode = normalizeVpnMode(settings.mode);
   normalizeTunSettings(settings);
   save();
+  if (hadWarmConfigChange && warmRuntime.proc) stopWarmProcess().catch(() => {});
   return getSettings();
 }
 export function getServers() { if (!settings) init(); return structuredClone(servers); }
@@ -382,11 +416,11 @@ function convertGenericProxyObject(obj, fallbackName='Server') {
     method:obj.method || obj.cipher || '', username:obj.username || obj.user || '',
     security:obj.security || (tls.enabled ? 'tls' : ''),
     flow:obj.flow || '', network:obj.network || obj.net || (ws.path ? 'ws' : (grpc.service_name || grpc.serviceName ? 'grpc' : 'tcp')),
-    sni:obj.sni || obj.servername || obj.server_name || tls.server_name || '',
+    sni:obj.sni || obj.servername || obj.server_name || obj['server-name'] || tls.server_name || tls.serverName || tls.servername || '',
     fingerprint:obj.fp || obj.fingerprint || '',
-    publicKey:obj.publicKey || obj.public_key || reality.public_key || reality.pbk || '',
-    shortId:obj.shortId || obj.short_id || reality.short_id || reality.sid || '',
-    spiderX:obj.spiderX || obj.spider_x || reality.spider_x || reality.spx || '',
+    publicKey:obj.publicKey || obj.public_key || reality.publicKey || reality.public_key || reality['public-key'] || reality.pbk || '',
+    shortId:obj.shortId || obj.short_id || reality.shortId || reality.short_id || reality['short-id'] || reality.sid || '',
+    spiderX:obj.spiderX || obj.spider_x || reality.spiderX || reality.spider_x || reality['spider-x'] || reality.spx || '',
     path:obj.path || ws.path || '', host:obj.host || ws.headers?.Host || ws.headers?.host || '',
     serviceName:obj.serviceName || obj.service_name || grpc.service_name || grpc.serviceName || '',
     alpn:Array.isArray(tls.alpn)?tls.alpn.join(','):obj.alpn || '',
@@ -458,7 +492,42 @@ export function updateServer(id, patch) {
 export function selectServer(id) {
   id = normalizeEntityId(id);
   if (!settings) init(); if (!servers.some(s => s.id === id)) throw new Error('Сервер не найден');
+  if (warmRuntime.proc && warmRuntime.serverId !== id) stopWarmProcess().catch(() => {});
   settings.activeServerId = id; save(); emit(); return structuredClone(servers.find(s=>s.id===id));
+}
+
+export async function prewarm(opts={}) {
+  if (!settings) init();
+  if (process.platform !== 'win32') return { ok:false, skipped:true, reason:'windows-only' };
+  if (runtime.proc || warmRuntime.proc) return { ok:true, ready:!!warmRuntime.ready, reused:true, serverId:warmRuntime.serverId };
+  if (prewarmPromise) return prewarmPromise;
+  prewarmPromise=(async()=>{
+    let server=servers.find(s=>s.id===settings.activeServerId) || servers.find(s=>s.favorite) || servers[0];
+    if(!server) return {ok:false, skipped:true, reason:'no-server'};
+    const mode='proxy';
+    const core=coreForServer(server,mode);
+    let exe=await ensureCore(core);
+    // Warm core uses the same configured local listeners as the real runtime so
+    // its config hash can be adopted without restarting the core. Startup clears
+    // any stale Launcher-owned Windows proxy before this process is created.
+    const cfg=core==='sing-box'?await buildSingboxConfig(server,mode):finalizeXrayConfig(buildXrayConfig(server,mode),server);
+    const configPath=path.join(CFG_DIR(),`warm-${core}.json`);
+    fs.writeFileSync(configPath,JSON.stringify(cfg,null,2),'utf8');
+    const hash=configHash(cfg);
+    const proc=spawn(exe,['run','-c',configPath],{cwd:path.dirname(exe),windowsHide:true,stdio:['ignore','pipe','pipe']});
+    warmRuntime={proc,serverId:server.id,core,mode,configPath,configHash:hash,ready:false};
+    const onWarmOutput=(d,warn=false)=>{ const text=decodeOemText(String(d||'').trim()); if(text && /error|failed|panic/i.test(text)) (warn?console.warn:console.log)('[proxy-warm]',text); };
+    proc.stdout?.on('data',d=>onWarmOutput(d,false));
+    proc.stderr?.on('data',d=>onWarmOutput(d,true));
+    proc.once('exit',()=>{ if(warmRuntime.proc===proc) warmRuntime={proc:null,serverId:null,core:null,mode:'proxy',configPath:null,configHash:'',ready:false}; });
+    const listening=await waitForTcpListening(settings.httpPort,3000);
+    if(!listening){ await stopWarmProcess(); return {ok:false,ready:false,reason:'listener-timeout'}; }
+    if(warmRuntime.proc!==proc) return {ok:false,ready:false,reason:'warm-exited'};
+    warmRuntime.ready=true;
+    emit();
+    return {ok:true,ready:true,serverId:server.id,core};
+  })();
+  try { return await prewarmPromise; } finally { prewarmPromise=null; }
 }
 
 export async function toggleServer(id) {
@@ -470,7 +539,8 @@ export async function toggleServer(id) {
   if(runtime.proc) await stop();
   settings.activeServerId=id;
   save(); emit();
-  return start({mode:settings.mode, fast:true});
+  // Быстрый клик использует выбранный режим. По умолчанию — Mixed.
+  return start({mode:settings.mode || 'mixed', fast:true});
 }
 export function toggleFavoriteServer(id) {
   id = normalizeEntityId(id);
@@ -815,6 +885,20 @@ export function deleteSubscription(id) {
   subscriptions = subscriptions.filter(s=>s.id!==id); servers=servers.filter(s=>s.subscriptionId!==id); if(settings.activeServerId && !servers.some(s=>s.id===settings.activeServerId)) settings.activeServerId=servers[0]?.id||null; save(); emit(); return getSubscriptions();
 }
 
+function validateServerForRuntime(server) {
+  if (!server?.address || !Number(server?.port)) throw new Error('VPN-сервер не содержит корректный адрес или порт.');
+  if (server.protocol === 'vless') {
+    if (!server.uuid) throw new Error('VLESS-сервер не содержит UUID. Сервер пропущен.');
+    if (server.security === 'reality' && !String(server.publicKey || '').trim()) {
+      throw new Error('VLESS REALITY-сервер пропущен: отсутствует public key. Обновите подписку или выберите другой сервер.');
+    }
+    if (server.security === 'reality' && !String(server.sni || '').trim()) {
+      throw new Error('VLESS REALITY-сервер пропущен: отсутствует SNI/server name. Обновите подписку или выберите другой сервер.');
+    }
+  }
+  return true;
+}
+
 function xrayOutbound(server) {
   const s = server?.protocol === 'vless' ? normalizeServer(server) : server;
   if (s.protocol === 'vless') {
@@ -936,7 +1020,7 @@ function normalizeTunName(name) {
 function tunAdapterName() { return normalizeTunName(settings?.tunName || DEFAULTS.tunName); }
 
 function normalizeVpnMode(mode) {
-  return ['proxy','tun','mixed'].includes(mode) ? mode : 'proxy';
+  return ['proxy','tun','mixed'].includes(mode) ? mode : 'mixed';
 }
 
 function isTunMode(mode) { return mode === 'tun' || mode === 'mixed'; }
@@ -1301,44 +1385,47 @@ try {
   }
 }
 
-async function setWindowsSystemProxy(enabled) {
+async function setWindowsSystemProxy(enabled, fast=false) {
   if(process.platform!=='win32') return false;
   const pathKey='HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
   if(enabled){
     if(!runtime.systemProxyOriginal){
-      runtime.systemProxyOriginal={
-        ProxyEnable: await readWinRegValue(pathKey,'ProxyEnable'),
-        ProxyServer: await readWinRegValue(pathKey,'ProxyServer'),
-        ProxyOverride: await readWinRegValue(pathKey,'ProxyOverride'),
-        AutoConfigURL: await readWinRegValue(pathKey,'AutoConfigURL'),
-        AutoDetect: await readWinRegValue(pathKey,'AutoDetect')
-      };
+      const [ProxyEnable, ProxyServer, ProxyOverride, AutoConfigURL, AutoDetect] = await Promise.all([
+        readWinRegValue(pathKey,'ProxyEnable'),
+        readWinRegValue(pathKey,'ProxyServer'),
+        readWinRegValue(pathKey,'ProxyOverride'),
+        readWinRegValue(pathKey,'AutoConfigURL'),
+        readWinRegValue(pathKey,'AutoDetect')
+      ]);
+      runtime.systemProxyOriginal={ ProxyEnable, ProxyServer, ProxyOverride, AutoConfigURL, AutoDetect };
     }
     // Use one plain HTTP proxy endpoint for both HTTP and HTTPS CONNECT.
     // Protocol-specific `https=` here can make Windows/browser clients treat the
     // local listener as an HTTPS proxy, although it is an HTTP CONNECT proxy.
     const endpoint=`127.0.0.1:${settings.httpPort}`;
-    await writeWinReg(pathKey,'ProxyEnable','REG_DWORD','1');
-    await writeWinReg(pathKey,'ProxyServer','REG_SZ',endpoint);
-    // Do not preserve a bypass list while Launcher owns the system proxy.
-    // A stale ProxyOverride can silently send sites directly around Xray.
-    await writeWinReg(pathKey,'ProxyOverride','REG_SZ','<local>');
-    await writeWinReg(pathKey,'MigrateProxy','REG_DWORD','0');
-    await writeWinReg(pathKey,'AutoDetect','REG_DWORD','0');
-    await deleteWinReg(pathKey,'AutoConfigURL');
+    // Быстрый режим: все изменения реестра параллельно, один вызов WinINet API,
+    // без дополнительных reg query / refresh / probe на пути подключения.
+    await Promise.all([
+      writeWinReg(pathKey,'ProxyEnable','REG_DWORD','1'),
+      writeWinReg(pathKey,'ProxyServer','REG_SZ',endpoint),
+      writeWinReg(pathKey,'ProxyOverride','REG_SZ','<local>'),
+      writeWinReg(pathKey,'MigrateProxy','REG_DWORD','0'),
+      writeWinReg(pathKey,'AutoDetect','REG_DWORD','0'),
+      deleteWinReg(pathKey,'AutoConfigURL')
+    ]);
     const apiApply=await applyWinInetSystemProxy(endpoint,true,'<local>');
     console.log('[proxy] WinINet system proxy API:',apiApply);
-    await refreshWinInetProxy();
-    const verifyEnable=await readWinRegValue(pathKey,'ProxyEnable');
-    const verifyServer=await readWinRegValue(pathKey,'ProxyServer');
-    const verifyOverride=await readWinRegValue(pathKey,'ProxyOverride');
-    console.log('[proxy] Windows system proxy active:', {enabled:verifyEnable, server:verifyServer, override:verifyOverride||''});
-    if(verifyEnable!=='0x1' && verifyEnable!=='1') throw new Error('Windows не применил ProxyEnable=1');
-    if(verifyServer!==endpoint) throw new Error(`Windows не применил ProxyServer=${endpoint}`);
-    // Avoid a second external network round-trip during startup.
-    // The local listener is checked below; real connectivity is covered by the
-    // background health monitor after the connection is marked ready.
-    console.log('[proxy] WinINet system proxy probe: deferred to background health monitor');
+    if(fast){
+      console.log('[proxy] Fast system proxy: verification/refresh skipped; health monitor checks reachability in background');
+    } else {
+      await refreshWinInetProxy();
+      const verifyEnable=await readWinRegValue(pathKey,'ProxyEnable');
+      const verifyServer=await readWinRegValue(pathKey,'ProxyServer');
+      const verifyOverride=await readWinRegValue(pathKey,'ProxyOverride');
+      console.log('[proxy] Windows system proxy active:', {enabled:verifyEnable, server:verifyServer, override:verifyOverride||''});
+      if(verifyEnable!=='0x1' && verifyEnable!=='1') throw new Error('Windows не применил ProxyEnable=1');
+      if(verifyServer!==endpoint) throw new Error(`Windows не применил ProxyServer=${endpoint}`);
+    }
   } else {
     const o=runtime.systemProxyOriginal;
     if(o){
@@ -1730,7 +1817,7 @@ async function fetchThroughProxy(url, proxyUrl, timeoutMs) {
     const secure = target.protocol === 'https:';
     if (!secure) {
       const pathName = `${target.pathname || '/'}${target.search || ''}`;
-      return await requestOverConnectedSocket(socket, [`GET ${pathName} HTTP/1.1`, `Host: ${target.host}`, 'User-Agent: Zapret-Launcher/1.4.10', 'Accept: */*', 'Accept-Encoding: identity', 'Connection: close', '', ''].join('\r\n'), timeoutMs);
+      return await requestOverConnectedSocket(socket, [`GET ${pathName} HTTP/1.1`, `Host: ${target.host}`, 'User-Agent: Zapret-Launcher/1.5.6', 'Accept: */*', 'Accept-Encoding: identity', 'Connection: close', '', ''].join('\r\n'), timeoutMs);
     }
     const secureSocket = tls.connect({ socket, servername: target.hostname, rejectUnauthorized: true, ALPNProtocols: ['http/1.1'] });
     await new Promise((resolve, reject) => {
@@ -1738,7 +1825,7 @@ async function fetchThroughProxy(url, proxyUrl, timeoutMs) {
       secureSocket.once('secureConnect', () => { clearTimeout(timer); resolve(); });
       secureSocket.once('error', e => { clearTimeout(timer); reject(e); });
     });
-    return await requestOverConnectedSocket(secureSocket, [`GET ${target.pathname || '/'}${target.search || ''} HTTP/1.1`, `Host: ${target.host}`, 'User-Agent: Zapret-Launcher/1.4.10', 'Accept: application/json, text/plain, */*', 'Accept-Encoding: identity', 'Connection: close', '', ''].join('\r\n'), timeoutMs);
+    return await requestOverConnectedSocket(secureSocket, [`GET ${target.pathname || '/'}${target.search || ''} HTTP/1.1`, `Host: ${target.host}`, 'User-Agent: Zapret-Launcher/1.5.6', 'Accept: application/json, text/plain, */*', 'Accept-Encoding: identity', 'Connection: close', '', ''].join('\r\n'), timeoutMs);
   } catch (e) {
     try { socket?.destroy(); } catch {}
     return null;
@@ -1788,7 +1875,7 @@ function fetchPlainHttpThroughHttpProxy(url, proxyUrl, timeoutMs) {
         const headers = [
           `GET ${target.toString()} HTTP/1.1`,
           `Host: ${target.host}`,
-          'User-Agent: Zapret-Launcher/1.4.10',
+          'User-Agent: Zapret-Launcher/1.5.6',
           'Accept: */*',
           'Accept-Encoding: identity',
           'Connection: close'
@@ -1886,9 +1973,9 @@ function localProxyCredentialUrl(scheme, port, authMode, username, password) {
 }
 
 async function verifyOutboundViaHttpProxy(port, timeoutMs=12000) {
-  // Use the real Windows curl binary for the final proxy readiness check. This
-  // mirrors the exact manual test that has been proven to work on the target
-  // machine and avoids the custom socket/parser path being a second failure mode.
+  // Background connectivity check for the local HTTP proxy. This is intentionally
+  // not part of fast startup. Use HTTPS 204 endpoints instead of example.com because
+  // some networks/proxy chains return 502 for plain HTTP while HTTPS traffic works.
   const auth = settings.httpAuthMode==='manual' && settings.httpAuthUser
     ? `${encodeURIComponent(String(settings.httpAuthUser))}:${encodeURIComponent(String(settings.httpAuthPassword||''))}@`
     : '';
@@ -1896,7 +1983,10 @@ async function verifyOutboundViaHttpProxy(port, timeoutMs=12000) {
   const limit = Math.min(6000, Math.max(2500, Number(timeoutMs)||5000));
   // One fast HTTP request proves local proxy -> outbound -> Internet.
   // Do not block connection startup on additional public-IP endpoints.
-  const targets = [{url:'http://example.com/', kind:'status'}];
+  const targets = [
+    {url:'https://cp.cloudflare.com/generate_204', kind:'status'},
+    {url:'https://www.gstatic.com/generate_204', kind:'status'}
+  ];
   let last='';
   for (const t of targets) {
     try {
@@ -1919,7 +2009,7 @@ async function verifyOutboundViaHttpProxy(port, timeoutMs=12000) {
       last=`${t.url}: ${e?.stderr||e?.message||String(e)}`;
     }
   }
-  console.warn('[proxy] curl system-proxy health-check failed:',last);
+  console.warn('[proxy] curl system-proxy background health-check failed:',last);
   return {ok:false,ip:'',via:'',error:last};
 }
 
@@ -2000,6 +2090,8 @@ export async function start(opts={}) {
   if(startPromise) return startPromise;
   startPromise=(async()=>{
     let proc=null;
+    let remoteHandshakeError='';
+    let remoteHandshakeSeen=false;
     try {
       // Fast reconnect: a previously downloaded server is enough to start.
       // Do not refresh every subscription on every connect; explicit refresh
@@ -2013,13 +2105,12 @@ export async function start(opts={}) {
         if(server) settings.activeServerId=server.id;
       }
       if(!server) throw new Error('Сначала добавьте VPN-сервер или подписку');
+      validateServerForRuntime(server);
       if(settings.activeServerId !== server.id) { settings.activeServerId=server.id; save(); emit(); }
       const mode=opts.mode || settings.mode || 'proxy';
       const fastConnect = opts.fast !== false;
       normalizeTunSettings(settings);
-      let core = isTunMode(mode) && settings.tunCore ? settings.tunCore : server.core;
-      if(core==='auto') core=['hysteria2','wireguard'].includes(server.protocol)?'sing-box':'xray';
-      if(['hysteria2','wireguard'].includes(server.protocol)) core='sing-box';
+      let core = coreForServer(server, mode);
       let exe=await ensureCore(core);
       // Xray 26.3.27 имеет подтверждённые проблемы с Windows TUN (в том числе
       // отсутствие корректно настроенного gateway/DNS/маршрутов). Для этой версии
@@ -2045,15 +2136,38 @@ export async function start(opts={}) {
       }
       const cfg=core==='sing-box'?await buildSingboxConfig(server,mode):finalizeXrayConfig(buildXrayConfig(server,mode),server);
       const configPath=path.join(CFG_DIR(),`active-${core}.json`); fs.writeFileSync(configPath,JSON.stringify(cfg,null,2),'utf8');
+      const desiredHash=configHash(cfg);
+      let adoptedWarm=false;
+      let ready=false;
+      // Если ядро было прогрето заранее для того же сервера и конфигурации,
+      // просто присваиваем уже слушающий процесс runtime — повторный запуск Xray/sing-box не нужен.
+      if(fastConnect && mode==='proxy' && warmRuntime.proc && warmRuntime.ready && warmRuntime.serverId===server.id && warmRuntime.core===core && warmRuntime.configHash===desiredHash){
+        runtime.proc=warmRuntime.proc; runtime.core=core; runtime.mode=mode; runtime.configPath=warmRuntime.configPath; runtime.ready=false; runtime.trafficSeen=false; runtime.logTail=[];
+        const adopted=runtime.proc;
+        warmRuntime={proc:null,serverId:null,core:null,mode:'proxy',configPath:null,configHash:'',ready:false};
+        const onCoreOutput=(d,warn=false)=>{ const text=String(d||'').trim(); if(/\baccepted\b|\[tun-in\s*>>\s*proxy\]|\[http-in\s*>>\s*proxy\]|\[socks-in\s*>>\s*proxy\]/i.test(text)) runtime.trafficSeen=true; if(/reality verification failed/i.test(text)){ remoteHandshakeError='REALITY-проверка сервера не прошла. Сервер отклоняет параметры REALITY (public key/short ID/SNI) или сервер больше не действителен.'; remoteHandshakeSeen=true; } if(text){ runtime.logTail.push(text); if(runtime.logTail.length>30) runtime.logTail.shift(); } };
+        adopted.stdout?.on('data',d=>onCoreOutput(d,false)); adopted.stderr?.on('data',d=>onCoreOutput(d,true));
+        adopted.once('exit',()=>{ if(runtime.proc===adopted){ runtime.proc=null; runtime.core=null; runtime.configPath=null; runtime.ready=false; if(runtime.systemProxyChanged){setWindowsSystemProxy(false).catch(()=>{});runtime.systemProxyChanged=false;} if(settings){settings.enabled=false;save();} emit(); } });
+        if(settings.systemProxy){ await setWindowsSystemProxy(true, fastConnect); runtime.systemProxyChanged=true; }
+        const listening=await waitForTcpListening(settings.httpPort,500);
+        if(!listening) throw new Error(`VPN-ядро запущено, но локальный HTTP-порт ${settings.httpPort} не отвечает`);
+        ready=true;
+        adoptedWarm=true;
+      } else {
+        if(warmRuntime.proc) await stopWarmProcess();
+      }
       // In fast-connect mode the core itself validates the config on startup;
       // launching a second validator process only adds startup latency.
       if(!fastConnect) await validateCore(exe,configPath);
-      runtime.core=core; runtime.mode=mode; runtime.configPath=configPath; runtime.ready=false; runtime.trafficSeen=false; runtime.logTail=[];
-      proc=spawn(exe,['run','-c',configPath],{cwd:path.dirname(exe),windowsHide:true,stdio:['ignore','pipe','pipe']});
-      runtime.proc=proc;
+      if(!ready){
+        runtime.core=core; runtime.mode=mode; runtime.configPath=configPath; runtime.ready=false; runtime.trafficSeen=false; runtime.logTail=[];
+        proc=spawn(exe,['run','-c',configPath],{cwd:path.dirname(exe),windowsHide:true,stdio:['ignore','pipe','pipe']});
+        runtime.proc=proc;
+      }
       const onCoreOutput=(d, warn=false)=>{
         const text=String(d||'');
         if(/\baccepted\b|\[tun-in\s*>>\s*proxy\]|\[http-in\s*>>\s*proxy\]|\[socks-in\s*>>\s*proxy\]/i.test(text)) runtime.trafficSeen=true;
+        if(/reality verification failed/i.test(text)){ remoteHandshakeError='REALITY-проверка сервера не прошла. Сервер отклоняет параметры REALITY (public key/short ID/SNI) или сервер больше не действителен.'; remoteHandshakeSeen=true; }
         // Логи ядер на Windows пишутся в OEM-кодировке (CP866) — при перенаправлении
         // в консоль Electron кириллица превращается в «╨Т╨╜╨╡╤И╨╜╤П...». Декодируем:
         // символы ╨-╙ из диапазона U+2500-U+2513 — это байты 0xD0-0xD3, то есть
@@ -2078,23 +2192,26 @@ export async function start(opts={}) {
         if(decoded.trim()){ runtime.logTail.push(decoded.trim()); if(runtime.logTail.length>30) runtime.logTail.shift(); }
         (warn?console.warn:console.log)('[proxy]',decoded.trim());
       };
-      proc.stdout?.on('data',d=>onCoreOutput(d,false));
-      proc.stderr?.on('data',d=>onCoreOutput(d,true));
-      proc.once('error',err=>console.warn('[proxy] process error',err));
-      proc.once('exit',()=>{ if(runtime.proc===proc) runtime.proc=null; runtime.core=null; runtime.configPath=null; runtime.ready=false; runtime.trafficSeen=false; if(runtime.systemProxyChanged){setWindowsSystemProxy(false).catch(()=>{});runtime.systemProxyChanged=false;} if(settings){settings.enabled=false;save();} emit(); });
+      if(proc){
+        proc.stdout?.on('data',d=>onCoreOutput(d,false));
+        proc.stderr?.on('data',d=>onCoreOutput(d,true));
+        proc.once('error',err=>console.warn('[proxy] process error',err));
+        proc.once('exit',()=>{ if(runtime.proc===proc) runtime.proc=null; runtime.core=null; runtime.configPath=null; runtime.ready=false; runtime.trafficSeen=false; if(runtime.systemProxyChanged){setWindowsSystemProxy(false).catch(()=>{});runtime.systemProxyChanged=false;} if(settings){settings.enabled=false;save();} emit(); });
+      }
 
-      let ready=false;
+      ready = adoptedWarm;
       if(!isTunMode(mode)) {
         // Fast mode only waits for the local proxy listener. Remote reachability
         // is checked by the background health monitor after we mark the VPN ready.
         const listening=await waitForTcpListening(settings.httpPort,fastConnect ? 1500 : 6000);
         if(!listening) throw new Error(`VPN-ядро запущено, но локальный HTTP-порт ${settings.httpPort} не открылся`);
-        if(settings.systemProxy){ await setWindowsSystemProxy(true); runtime.systemProxyChanged=true; }
+        if(settings.systemProxy && !runtime.systemProxyChanged){ await setWindowsSystemProxy(true, fastConnect); runtime.systemProxyChanged=true; }
         if(!fastConnect){
           const check=await verifyOutboundViaHttpProxy(settings.httpPort,5000);
           if(!check.ok){
             const detail=await describeVerifyFailure();
             const recent=Array.isArray(runtime.logTail)?runtime.logTail.slice(-8).join(' | '):'';
+            if(remoteHandshakeSeen) throw new Error(remoteHandshakeError);
             const serverHint=` Сервер: ${server.address}:${server.port}, протокол ${server.protocol}, сеть ${server.network||'tcp'}, security ${server.security||'none'}${server.sni?`, SNI ${server.sni}`:''}.`;
             try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
             throw new Error(detail + serverHint + (recent ? ` Последние сообщения Xray: ${recent}` : ''));
@@ -2104,37 +2221,67 @@ export async function start(opts={}) {
         ready=true;
       } else {
         const adapterName=tunAdapterName();
-        const adapter=await waitForTunAdapter(adapterName,fastConnect ? 8000 : 12000);
-        if(!adapter) throw new Error(`TUN-интерфейс «${adapterName}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
-        if(isTunMode(mode) && core==='xray'){
-          if(!adapter.index) throw new Error(`Не удалось определить индекс TUN-интерфейса «${adapterName}»`);
-          runtime.tunIfIndex=adapter.index;
-          const routes=await ensureWindowsTunRoutes(adapter.index);
-          if(!routes.ok) throw new Error(`Не удалось установить IPv4-маршруты TUN: ${routes.error||'неизвестная ошибка'}`);
-          console.log('[proxy] Installed Windows TUN IPv4 routes on interface',adapter.index, routes.routes.join(', '));
-        }
-        // Fast mode does not wait for an external HTTP probe after TUN setup.
-        // The background health monitor will verify real reachability after start.
-        if(!fastConnect){
-          const check=await verifyTunOutbound(15000,core);
-          if(!check.ok){
-            const route=await tunRouteDiagnostics(3000,runtime.tunIfIndex||null);
-            const recent=Array.isArray(runtime.logTail)?runtime.logTail.slice(-8).join(' | '):'';
-            await cleanupWindowsTunRoutes(runtime.tunIfIndex||route.index||null);
-            try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
-            const routeHint=route.ok ? ` IPv4-маршруты TUN (/1+/1): ${route.halfRoutes?'найдены':'не найдены'}${route.index!==null?`, индекс ${route.index}`:''}.` : ` Не удалось определить IPv4-маршруты TUN: ${route.error||'неизвестная ошибка'}.`;
-            throw new Error('Проверка VPN не пройдена: Windows не направил тестовый IPv4 через TUN или TUN не вернул HTTP-ответ.' + routeHint + (recent ? ` Последние сообщения Xray: ${recent}` : ''));
+        if(mode==='mixed' && fastConnect){
+          // Mixed remains the default, but a local listener/TUN is NOT enough to
+          // call the VPN connected. In particular REALITY can fail after Xray/sing-box
+          // has already opened its local ports. First prove one end-to-end request,
+          // then enable the Windows proxy and expose the connected state.
+          const adapterPromise=waitForTunAdapter(adapterName,5000);
+          const listenerPromise=waitForTcpListening(settings.httpPort,1500);
+          const [adapter,listeningMixed]=await Promise.all([adapterPromise,listenerPromise]);
+          if(!listeningMixed && core==='sing-box') throw new Error(`VPN-ядро запущено, но локальный HTTP-порт ${settings.httpPort} не открылся`);
+          if(!adapter) throw new Error(`TUN-интерфейс «${adapterName}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
+          if(core==='xray'){
+            if(!adapter.index) throw new Error(`Не удалось определить индекс TUN-интерфейса «${adapterName}»`);
+            runtime.tunIfIndex=adapter.index;
+            const routes=await ensureWindowsTunRoutes(adapter.index);
+            if(!routes.ok) throw new Error(`Не удалось установить IPv4-маршруты TUN: ${routes.error||'неизвестная ошибка'}`);
+            console.log('[proxy] Installed Windows TUN IPv4 routes on interface',adapter.index, routes.routes.join(', '));
           }
-          runtime.publicIp=check.ip;
-        }
-        if(mode==='mixed') {
+          if(remoteHandshakeSeen) throw new Error(remoteHandshakeError);
+          // Fast Mixed startup must not depend on a public HTTP endpoint. A 502 from
+          // example.com (or any external probe) is not a reliable readiness signal
+          // and used to cancel otherwise valid local TUN/proxy startup. In fast mode
+          // we only require the local TUN + listener to be ready and we keep remote
+          // reachability checks in the background health monitor. REALITY handshake
+          // failures emitted by the core are still fatal during startup.
           settings.systemProxy=true;
-          await setWindowsSystemProxy(true);
+          await setWindowsSystemProxy(true,true);
           runtime.systemProxyChanged=true;
-          console.log('[proxy] Mixed mode: TUN + Windows system proxy enabled');
+          console.log('[proxy] Mixed mode: TUN + Windows system proxy enabled (fast, background health check)');
+          ready=true;
+        } else {
+          const adapter=await waitForTunAdapter(adapterName,fastConnect ? 8000 : 12000);
+          if(!adapter) throw new Error(`TUN-интерфейс «${adapterName}» не перешёл в состояние Up${lastTunState==='none'?'; проверьте, что драйвер Wintun доступен (для ядра Xray нужна wintun.dll рядом с xray.exe), или выберите ядро sing-box для режима TUN':''}`);
+          if(isTunMode(mode) && core==='xray'){
+            if(!adapter.index) throw new Error(`Не удалось определить индекс TUN-интерфейса «${adapterName}»`);
+            runtime.tunIfIndex=adapter.index;
+            const routes=await ensureWindowsTunRoutes(adapter.index);
+            if(!routes.ok) throw new Error(`Не удалось установить IPv4-маршруты TUN: ${routes.error||'неизвестная ошибка'}`);
+            console.log('[proxy] Installed Windows TUN IPv4 routes on interface',adapter.index, routes.routes.join(', '));
+          }
+          if(!fastConnect){
+            const check=await verifyTunOutbound(15000,core);
+            if(!check.ok){
+              const route=await tunRouteDiagnostics(3000,runtime.tunIfIndex||null);
+              const recent=Array.isArray(runtime.logTail)?runtime.logTail.slice(-8).join(' | '):'';
+              await cleanupWindowsTunRoutes(runtime.tunIfIndex||route.index||null);
+              try{proc.kill()}catch{}; if(process.platform==='win32' && proc.pid){try{await execFileAsync('taskkill.exe',['/PID',String(proc.pid),'/T','/F'],{windowsHide:true})}catch{}}
+              const routeHint=route.ok ? ` IPv4-маршруты TUN (/1+/1): ${route.halfRoutes?'найдены':'не найдены'}${route.index!==null?`, индекс ${route.index}`:''}.` : ` Не удалось определить IPv4-маршруты TUN: ${route.error||'неизвестная ошибка'}.`;
+              throw new Error('Проверка VPN не пройдена: Windows не направил тестовый IPv4 через TUN или TUN не вернул HTTP-ответ.' + routeHint + (recent ? ` Последние сообщения Xray: ${recent}` : ''));
+            }
+            runtime.publicIp=check.ip;
+          }
+          if(mode==='mixed'){
+            settings.systemProxy=true;
+            await setWindowsSystemProxy(true, fastConnect);
+            runtime.systemProxyChanged=true;
+            console.log('[proxy] Mixed mode: TUN + Windows system proxy enabled');
+          }
+          ready=true;
         }
-        ready=true;
       }
+      if(remoteHandshakeSeen && !ready) throw new Error(remoteHandshakeError);
       settings.enabled=ready; settings.mode=normalizeVpnMode(mode); runtime.ready=ready; if(ready) startHealthMonitor(); save(); emit(); return status();
     } catch (e) {
       stopHealthMonitor();
@@ -2160,9 +2307,32 @@ export async function stop() {
 }
 export async function toggle(){ return runtime.proc?stop():start(); }
 
+export async function clearStaleLauncherSystemProxy() {
+  if(process.platform!=='win32') return {ok:true,changed:false};
+  if(!settings) init();
+  const pathKey='HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+  try {
+    const [enabled, server] = await Promise.all([
+      readWinRegValue(pathKey,'ProxyEnable'),
+      readWinRegValue(pathKey,'ProxyServer')
+    ]);
+    const expected = new Set([`127.0.0.1:${settings.httpPort}`, `127.0.0.1:${settings.socksPort}`]);
+    if((enabled==='0x1' || enabled==='1') && expected.has(String(server||''))) {
+      await writeWinReg(pathKey,'ProxyEnable','REG_DWORD','0');
+      await applyWinInetSystemProxy('',false,'');
+      await refreshWinInetProxy();
+      console.log('[proxy] Cleared stale Launcher Windows system proxy at startup:', server);
+      return {ok:true,changed:true};
+    }
+  } catch(e) {
+    console.warn('[proxy] Failed to inspect stale Windows system proxy:',e?.message||e);
+  }
+  return {ok:true,changed:false};
+}
+
 export function status() {
   if(!settings) init(); const a=servers.find(s=>s.id===settings.activeServerId)||null;
-  return {running:!!runtime.proc && runtime.ready===true, starting:!!runtime.proc && runtime.ready!==true, pid:runtime.proc?.pid||null, core:runtime.core, mode:runtime.mode, publicIp:runtime.publicIp||'', lastCheck:runtime.lastCheckAt||0, selected:a?{...a}:null, settings:getSettings(), servers:getServers(), subscriptions:getSubscriptions(), routes:getRoutes()};
+  return {running:!!runtime.proc && runtime.ready===true, starting:!!runtime.proc && runtime.ready!==true, prewarmReady:!!warmRuntime.ready, prewarmStarting:!!warmRuntime.proc && !warmRuntime.ready, pid:runtime.proc?.pid||null, core:runtime.core, mode:runtime.mode, publicIp:runtime.publicIp||'', lastCheck:runtime.lastCheckAt||0, selected:a?{...a}:null, settings:getSettings(), servers:getServers(), subscriptions:getSubscriptions(), routes:getRoutes()};
 }
 
 // Периодическая проверка живости туннеля. Без неё UI продолжал показывать
@@ -2177,8 +2347,12 @@ function startHealthMonitor() {
     try {
       const res = isTunMode(runtime.mode) ? await verifyTunOutbound(10000, runtime.core||'sing-box') : await verifyOutboundViaHttpProxy(settings.httpPort,10000);
       if(res.ok){ consecutiveHealthFails=0; runtime.publicIp=res.ip; runtime.lastCheckAt=Date.now(); emit(); }
-      else if(++consecutiveHealthFails>=3){
-        console.warn('[proxy] VPN перестал отвечать — соединение помечено как разорванное');
+      else if(++consecutiveHealthFails>=5){
+        // A background HTTP probe can fail transiently (including 502 from an
+        // intermediary) while the tunnel itself remains usable. Only disconnect
+        // after several consecutive failures and let the next successful request
+        // reset the counter.
+        console.warn('[proxy] VPN background health-check failed repeatedly — reconnecting');
         consecutiveHealthFails=0;
         stop().catch(()=>{});
       }
@@ -2270,7 +2444,7 @@ export async function checkCores() {
   return out;
 }
 
-export async function shutdown(){ if(runtime.proc) await stop(); }
+export async function shutdown(){ if(runtime.proc) await stop(); else if(warmRuntime.proc) await stopWarmProcess(); }
 
 init();
 

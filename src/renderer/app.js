@@ -8,8 +8,8 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
 // маркер сборки рендера: виден в бейдже шапки (самодиагностика старых файлов)
-const RENDERER_BUILD = 'r1.4.9';
-const EXPECT_BUILD = { m: 'm1.4.9', r: 'r1.4.9', p: 'p1.4.9', h: 'h1.4.9' };
+const RENDERER_BUILD = 'r1.5.5';
+const EXPECT_BUILD = { m: 'm1.5.5', r: 'r1.5.5', p: 'p1.5.5', h: 'h1.5.5' };
 const BUILD_LABEL = { m: 'src/main', r: 'app.js', p: 'preload.cjs', h: 'index.html' };
 
 // любую ошибку UI — в тост, чтобы «тихие» падения больше не были невидимыми
@@ -108,8 +108,10 @@ function renderFavorites() {
     grid.dataset.structureKey=key;
   }
   const favSection=$('#favSection');
-  favSection.classList.toggle('hidden', favBats.length === 0 && favVpn.length === 0);
-  if (!favSection.classList.contains('hidden')) favSection.classList.toggle('collapsed', localStorage.getItem('zl:collapse:favorites')==='1');
+  favSection?.classList.remove('hidden');
+  if (favSection) favSection.classList.toggle('collapsed', localStorage.getItem('zl:collapse:favorites')==='1');
+  const favEmpty=$('#favEmpty');
+  favEmpty?.classList.toggle('hidden', favBats.length > 0 || favVpn.length > 0);
   grid.querySelectorAll('.tile').forEach(updateTile);
   grid.querySelectorAll('.vpn-server-tile[data-proxy-id]').forEach(t=>updateVpnTile(t));
 }
@@ -336,13 +338,19 @@ function renderTg() {
   const versionEl = $('#tgVersion');
   const settingsStatus = $('#tgSettingsStatus');
   const settingsVersion = $('#tgSettingsVersion');
+  const tgTile=$('#tgTile');
+  const tgUnavailable=$('#tgUnavailable');
   if (!s.installed) {
-    section?.classList.add('hidden');
+    section?.classList.remove('hidden');
+    tgTile?.classList.add('hidden');
+    tgUnavailable?.classList.remove('hidden');
     if (settingsStatus) settingsStatus.textContent = 'Не установлен';
     if (settingsVersion) settingsVersion.textContent = '—';
     return;
   }
   section?.classList.remove('hidden');
+  tgTile?.classList.remove('hidden');
+  tgUnavailable?.classList.add('hidden');
   const status = s.running ? 'Запущен' : 'Остановлен';
   if (statusEl) statusEl.textContent = status;
   if (versionEl) versionEl.textContent = s.version || '—';
@@ -647,7 +655,8 @@ function renderProxySubscriptions(){
 function renderProxyState(p = state.proxy) {
   const px=p||state.proxy||{}; state.proxy={...state.proxy,...px}; const selected=px.selected||(px.servers||[]).find(s=>s.id===px.settings?.activeServerId); const running=!!px.running; const lat=selected?.latency!=null?`${selected.latency} ms`:'—';
   const connecting=!!state.proxyConnectingId && !running;
-  const statusText=connecting?'Подключение…':(running?(px.mode==='tun'?'TUN подключён':px.mode==='mixed'?'Смешанный режим подключён':'Прокси подключён'):'Остановлен');
+  const prewarmed=!!px.prewarmReady && !running;
+  const statusText=connecting?'Подключение…':(running?(px.mode==='tun'?'TUN подключён':px.mode==='mixed'?'Смешанный режим подключён':'Прокси подключён'):(prewarmed?'Ядро готово':'Остановлен'));
   ['#vpnSectionStatus','#proxyQuickStatus','#proxySettingsStatus'].forEach(sel=>{const el=$(sel);if(el){el.textContent=statusText;el.classList.toggle('on',running);el.classList.toggle('connecting',connecting);}});
   $('#vpnSection')?.classList.toggle('connecting',connecting);
   // Показываем IP, полученный через туннель, — доказательство, что VPN реально работает.
@@ -725,6 +734,19 @@ function closeAppConfirm(result) {
   resolve?.(!!result);
 }
 
+/* ==================== Основные вкладки ==================== */
+
+function setMainTab(name, focusInput=false) {
+  const valid = new Set(['scripts','favorites','vpn','tg']);
+  const tab = valid.has(name) ? name : 'scripts';
+  $$('.main-tab').forEach((el) => el.classList.toggle('active', el.dataset.mainTab === tab));
+  $$('.main-page').forEach((el) => el.classList.toggle('active', el.id === `mainPage-${tab}`));
+  localStorage.setItem('zl:main-tab', tab);
+  // VPN ядро не запускается автоматически при открытии вкладки.
+  // Подключение начинается только после клика по серверу.
+  if (focusInput && tab === 'vpn') setTimeout(() => $('#vpnSubInput')?.focus(), 0);
+}
+
 /* ==================== Инициализация ==================== */
 
 async function init() {
@@ -736,7 +758,7 @@ async function init() {
   $('#appConfirmOk')?.addEventListener('click',()=>closeAppConfirm(true));
   $('#appConfirmCancel')?.addEventListener('click',()=>closeAppConfirm(false));
   $('#appConfirm')?.addEventListener('click',(e)=>{if(e.target.id==='appConfirm')closeAppConfirm(false);});
-  const focusVpn = () => { $('#vpnSection')?.scrollIntoView({behavior:'smooth',block:'start'}); $('#vpnSubInput')?.focus(); };
+  const focusVpn = () => setMainTab('vpn', true);
   $('#btnProxy').onclick = focusVpn;
   $('#btnProxyOpen')?.addEventListener('click', focusVpn);
 
@@ -827,6 +849,12 @@ async function init() {
     }
   });
 
+  // основные вкладки
+  $$('.main-tab').forEach((tab) => {
+    tab.onclick = () => setMainTab(tab.dataset.mainTab);
+  });
+  setMainTab(localStorage.getItem('zl:main-tab') || 'favorites');
+
   // вкладки настроек
   $$('.tab').forEach((tab) => {
     tab.onclick = () => {
@@ -905,7 +933,7 @@ async function init() {
     state.appUpdate = await window.api.checkAppUpdate();
     renderAppUpdate();
   renderProxyState(state.proxy);
-    toast(state.appUpdate.hasUpdate ? `Доступна версия ${state.appUpdate.remote}` : `Обновлений приложения нет.`, state.appUpdate.hasUpdate ? 'warn' : 'ok');
+    toast(state.appUpdate.hasUpdate ? `Доступна версия ${state.appUpdate.remote}` : 'Обновлений нет.', state.appUpdate.hasUpdate ? 'warn' : 'ok');
   };
   $('#btnAppUpdate').onclick = async () => {
     const res = await window.api.runAppUpdate();
@@ -930,7 +958,7 @@ async function init() {
     const repo = e.target.value.trim();
     if (!repo) return;
     state.cfg = await window.api.setConfig({ repo });
-    toast(`Источник обновлений: ${repo}`, 'ok');
+    toast(`Источник обновлений сохранён: ${repo}`, 'ok');
   };
 
   // обновления
@@ -1166,17 +1194,6 @@ async function init() {
     state.bats = [];
   }
   state.favorites = new Set(state.cfg.favorites || []);
-// самодиагностика частичной замены файлов: маркеры всех четырёх слоёв
-  const markers = {
-    m: (state.sys && state.sys.build) || 'OLD',
-    r: RENDERER_BUILD,
-    p: (window.api && window.api.build) || 'OLD',
-    h: (document.querySelector('meta[name="zl-build"]') || {}).content || 'OLD'
-  };
-const stale = Object.keys(EXPECT_BUILD).filter((k) => markers[k] !== EXPECT_BUILD[k]);
-  if (stale.length) {
-    toast(`Заменены не все файлы! Устарели: ${stale.map((k) => BUILD_LABEL[k]).join(', ')}. Удалите папку src ЦЕЛИКОМ и распакуйте архив заново.`, 'warn', 14000);
-  }
   if (state.sys && state.sys.elevated === false) $('#bannerAdmin').classList.remove('hidden');
 
   applyTheme(state.cfg.accentColor, state.cfg.backgroundColor);
@@ -1194,7 +1211,7 @@ const stale = Object.keys(EXPECT_BUILD).filter((k) => markers[k] !== EXPECT_BUIL
     }).catch(() => {});
   }
   if (state.cfg.tgAutoCheckUpdates !== false) { window.api.tgCheck().then((i) => { state.tgUpdate = i; renderTgUpdate(); }).catch(() => {}); }
-  if (state.cfg.appAutoCheckUpdates !== false) { window.api.checkAppUpdate().then((i) => { state.appUpdate = i; renderAppUpdate(); if (i?.hasUpdate) toast(`Доступно обновление приложения ${i.remote}.`, 'warn', 7000); }).catch(() => {}); }
+  if (state.cfg.appAutoCheckUpdates !== false) { window.api.checkAppUpdate().then((i) => { state.appUpdate = i; renderAppUpdate(); }).catch(() => {}); }
 }
 
 init();

@@ -1,9 +1,9 @@
-import { app, BrowserWindow, dialog, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, dialog, Tray, Menu, nativeImage, Notification } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { registerIpc, setWindow, initAfterReady, initProxyAfterReady } from './ipc.js';
+import { registerIpc, setWindow, initAfterReady, initProxyAfterReady, initReleaseNotifications } from './ipc.js';
 import { runner } from './runner.js';
 import { getConfig, saveConfig } from './config.js';
 import { TgProxyManager } from './tgProxy.js';
@@ -11,12 +11,13 @@ import { shutdown as shutdownProxy } from './proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes('--smoke');
-const BUILD = 'm1.4.9';
+const BUILD = 'm1.5.5';
 let tgProxyProcess = null;
 let tray = null;
 
 // имя приложения для диспетчера задач и панели задач Windows
 app.setName('Zapret Launcher');
+const APP_ICON = path.join(__dirname, '..', 'assets', 'icon.ico');
 
 // -------- глобальный лок: только ОДНО окно лаунчера на всю систему --------
 // (два окна из разных папок дают «фантомные» зелёные плитки и общий лог)
@@ -58,7 +59,7 @@ if (!app.requestSingleInstanceLock()) {
 
 function createTray() {
   try {
-    const icon = nativeImage.createFromPath(path.join(__dirname, '..', '..', 'build', 'icon.png'));
+    const icon = nativeImage.createFromPath(APP_ICON);
     tray = new Tray(icon);
     const menu = Menu.buildFromTemplate([
       { label: 'Открыть Zapret Launcher', click: () => { const w=BrowserWindow.getAllWindows()[0]; if (w) { if(w.isMinimized()) w.restore(); w.show(); w.focus(); } } },
@@ -83,6 +84,7 @@ function createWindow() {
     maximizable: false,
     fullscreenable: false,
     hasShadow: false,
+    icon: APP_ICON,
     backgroundColor: '#00000000',
     show: false,
     autoHideMenuBar: true,
@@ -139,7 +141,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  try { app.setAppUserModelId('Zapret Launcher'); } catch {}
+  try { app.setAppUserModelId('com.zapret.launcher'); } catch {}
   // файл лога раннера: userData/runner.log
   try { process.env.ZL_LOG = path.join(app.getPath('userData'), 'runner.log'); } catch {}
   // только одно окно: иначе старое окно рисует фантомные статусы
@@ -168,6 +170,7 @@ app.whenReady().then(() => {
   initProxyAfterReady();
   createWindow();
   createTray();
+  initReleaseNotifications();
   const cfg = getConfig();
   if (cfg.tgAutoStart) {
     try {

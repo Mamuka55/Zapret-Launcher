@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="zl-build" content="h1.4.9">
+  <meta name="zl-build" content="h1.5.5">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
   <title>Zapret Launcher</title>
@@ -54,35 +54,63 @@
         <span>Запуск драйвера WinDivert и установка сервиса не будут работать. Собранная версия (exe) запрашивает права один раз при старте.</span>
       </div>
     </div>
-    <section id="favSection" class="hidden collapsible-section">
+<nav class="main-tabs" id="mainTabs" aria-label="Разделы приложения">
+  <button class="main-tab active" data-main-tab="favorites">Избранное</button>
+  <button class="main-tab" data-main-tab="scripts">Скрипты обхода</button>
+  <button class="main-tab" data-main-tab="vpn">VPN</button>
+  <button class="main-tab" data-main-tab="tg">TG Proxy</button>
+</nav>
+
+<div class="main-pages">
+  <section class="main-page active" id="mainPage-scripts">
+    <section class="collapsible-section">
+      <h2 class="sec-title collapsible-head" id="allTitle" data-collapse-target="scripts">
+        <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z"/></svg>
+        Скрипты обхода <button class="section-collapse-btn" type="button" title="Свернуть/развернуть" aria-label="Свернуть/развернуть"><svg viewBox="0 0 24 24"><path d="m7 9 5 5 5-5"/></svg></button>
+      </h2>
+      <div class="grid section-content" id="batsGrid"></div>
+      <div id="emptyState" class="empty hidden">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+        <p>Батники не найдены.<br>Выберите папку zapret в настройках или установите свежую версию.</p>
+        <button class="btn btn-red" id="btnEmptyFolder">Выбрать папку</button>
+      </div>
+    </section>
+  </section>
+
+  <section class="main-page" id="mainPage-favorites">
+    <section id="favSection" class="collapsible-section">
       <h2 class="sec-title collapsible-head" data-collapse-target="favorites">
         <svg viewBox="0 0 24 24"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1L12 2z"/></svg>
         Избранное <button class="section-collapse-btn" type="button" title="Свернуть/развернуть" aria-label="Свернуть/развернуть"><svg viewBox="0 0 24 24"><path d="m7 9 5 5 5-5"/></svg></button>
       </h2>
       <div class="grid section-content" id="favGrid"></div>
+      <div id="favEmpty" class="empty hidden">
+        <svg viewBox="0 0 24 24"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9-5-4.9 6.9-1L12 2z"/></svg>
+        <p>Здесь появятся ваши избранные скрипты и VPN-серверы.</p>
+      </div>
     </section>
+  </section>
 
+  <section class="main-page" id="mainPage-vpn">
     <section id="vpnSection" class="vpn-section category-section collapsible-section">
       <div class="vpn-section-head">
         <h2 class="sec-title collapsible-head" data-collapse-target="vpn"><span class="tg-title-icon vpn-title-icon">VPN</span> VPN <span class="vpn-status-pill" id="vpnSectionStatus">Остановлен</span> <button class="section-collapse-btn" type="button" title="Свернуть/развернуть" aria-label="Свернуть/развернуть"><svg viewBox="0 0 24 24"><path d="m7 9 5 5 5-5"/></svg></button></h2>
         <div class="vpn-header-actions">
-          <button class="icon-btn action-btn" id="btnVpnPingAll" title="Проверить пинг всех серверов" aria-label="Проверить пинг">
-            <svg viewBox="0 0 24 24"><path d="M4 12h3l2-6 4 12 2-6h5"/></svg><span>Пинг</span>
-          </button>
-          <button class="icon-btn action-btn" id="btnVpnRefreshAll" title="Обновить подписки" aria-label="Обновить подписки">
-            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 2 5"/><path d="M20 4v7h-7"/></svg><span>Обновить</span>
-          </button>
+          <button class="icon-btn action-btn" id="btnVpnPingAll" title="Проверить пинг всех серверов" aria-label="Проверить пинг"><svg viewBox="0 0 24 24"><path d="M4 12h3l2-6 4 12 2-6h5"/></svg><span>Пинг</span></button>
+          <button class="icon-btn action-btn" id="btnVpnRefreshAll" title="Обновить подписки" aria-label="Обновить подписки"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 2 5"/><path d="M20 4v7h-7"/></svg><span>Обновить</span></button>
         </div>
       </div>
       <div class="section-content vpn-section-content">
-      <div class="vpn-addbar">
-        <input id="vpnSubInput" class="vpn-sub-input" type="text" placeholder="Вставьте ссылку VPN-подписки и нажмите Enter… (http(s), INCY add/crypt1, HAPP add/crypt3, v2rayTun crypt)" autocomplete="off" spellcheck="false">
-      </div>
-      <div id="vpnServerGrid" class="vpn-grid"></div>
+        <div class="vpn-addbar">
+          <input id="vpnSubInput" class="vpn-sub-input" type="text" placeholder="Вставьте ссылку VPN-подписки и нажмите Enter…" autocomplete="off" spellcheck="false"> <!-- INCY add/crypt1 • HAPP add/crypt3 • v2rayTun crypt -->
+        </div>
+        <div id="vpnServerGrid" class="vpn-grid"></div>
       </div>
     </section>
+  </section>
 
-    <section id="tgSection" class="hidden collapsible-section">
+  <section class="main-page" id="mainPage-tg">
+    <section id="tgSection" class="collapsible-section">
       <h2 class="sec-title collapsible-head" data-collapse-target="tg"><span class="tg-title-icon">TG</span> TG Proxy <button class="section-collapse-btn" type="button" title="Свернуть/развернуть" aria-label="Свернуть/развернуть"><svg viewBox="0 0 24 24"><path d="m7 9 5 5 5-5"/></svg></button></h2>
       <div class="grid section-content">
         <div class="tile tg-tile" id="tgTile" data-name="tg-ws-proxy" role="button" tabindex="0" title="Запустить / остановить TG Proxy">
@@ -92,21 +120,13 @@
           <div class="tg-version">Версия: <b id="tgVersion">—</b></div>
         </div>
       </div>
-    </section>
-
-
-    <section class="collapsible-section">
-      <h2 class="sec-title collapsible-head" id="allTitle" data-collapse-target="scripts">
-        <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z"/></svg>
-        Скрипты обхода <button class="section-collapse-btn" type="button" title="Свернуть/развернуть" aria-label="Свернуть/развернуть"><svg viewBox="0 0 24 24"><path d="m7 9 5 5 5-5"/></svg></button>
-      </h2>
-      <div class="grid section-content" id="batsGrid"></div>
-      <div id="emptyState" class="empty hidden">
-        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
-        <p>Батники не найдены.<br>Выберите папку zapret в настройках (шестерёнка) или скачайте свежий релиз с GitHub.</p>
-        <button class="btn btn-red" id="btnEmptyFolder">Выбрать папку</button>
+      <div id="tgUnavailable" class="empty hidden">
+        <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9zm0 5v5m0 4h.01"/></svg>
+        <p>TG Proxy ещё не установлен.<br>Установите его через настройки → Обновления.</p>
       </div>
     </section>
+  </section>
+</div>
   </main>
 
   <!-- ======= Настройки (шестерёнка) ======= -->
@@ -181,8 +201,9 @@
                 <label class="field">HTTP<input type="number" id="proxyHttpPort" min="1024" max="65535"></label>
               </div>
               <div class="row top-gap">
-                <label class="switch"><input type="checkbox" id="proxySystemProxy"><span class="slider"></span><span class="switch-label">Включать системный прокси (в смешанном режиме — автоматически)</span></label>
+                <label class="switch"><input type="checkbox" id="proxySystemProxy"><span class="slider"></span><span class="switch-label">Включать системный прокси</span></label>
               </div>
+              <p class="hint">Быстрое подключение запускает ядро заранее и не ждёт проверку внешнего IP или ping. Проверка выполняется в фоне после подключения.</p>
               <div class="row top-gap">
                 <label class="field grow">Ядро TUN<select id="proxyTunCore"><option value="singbox">sing-box</option><option value="xray">Xray</option></select></label>
                 <label class="field grow">Имя TUN<input type="text" id="proxyTunName" maxlength="32" placeholder="EpicTunnel"></label>
@@ -261,8 +282,8 @@
               <label class="switch top-gap"><input type="checkbox" id="togTgAutoCheck"><span class="slider"></span><span class="switch-label">Проверять обновления TG Proxy при запуске</span></label>
               <div class="kv top-gap"><span>Состояние:</span><b id="tgUpdateText">—</b></div>
               <div class="row top-gap">
-                <button class="btn btn-red" id="btnTgInstall">Установить / обновить TG Proxy</button>
-                <button class="btn" id="btnTgCheck">Проверить обновление</button>
+                <button class="btn btn-red" id="btnTgInstall">Установить / обновить</button>
+                <button class="btn" id="btnTgCheck">Проверить обновления</button>
               </div>
               <div class="progress hidden" id="tgProgressWrap"><div id="tgProgressBar"></div></div>
             </div>
@@ -271,7 +292,7 @@
               <h3>Обновление Zapret Launcher</h3>
               <div class="kv"><span>Состояние:</span><b id="appUpdateText">—</b></div>
               <div class="row top-gap">
-                <button class="btn btn-red" id="btnAppCheck">Проверить приложение</button>
+                <button class="btn btn-red" id="btnAppCheck">Проверить обновления</button>
                 <button class="btn" id="btnAppUpdate">Установить обновление</button>
               </div>
               <label class="switch top-gap"><input type="checkbox" id="togAppAutoCheck"><span class="slider"></span><span class="switch-label">Проверять обновление приложения при запуске</span></label>

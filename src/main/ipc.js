@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, app, BrowserWindow } from 'electron';
+import { ipcMain, dialog, shell, app, BrowserWindow, Notification } from 'electron';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -27,6 +27,66 @@ function notifyProxy() { send('evt:proxy-state', proxy.status()); }
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+function getReleaseNotificationVersions() {
+  const cfg = getConfig();
+  return cfg.updateNotificationVersions && typeof cfg.updateNotificationVersions === 'object'
+    ? { ...cfg.updateNotificationVersions }
+    : {};
+}
+
+function notifyRelease(kind, title, version, htmlUrl) {
+  if (process.platform !== 'win32' || !version || getConfig().releaseNotifications === false) return false;
+  const seen = getReleaseNotificationVersions();
+  if (seen[kind] === version) return false;
+  try {
+    if (typeof Notification?.isSupported === 'function' && !Notification.isSupported()) return false;
+    const note = new Notification({
+      title,
+      body: `Доступна версия ${version}. Нажмите, чтобы открыть релиз.`,
+      silent: false
+    });
+    note.on('show', () => console.log(`[notify] Update notification shown: ${kind === 'tg' ? 'TG Proxy' : kind === 'zapret' ? 'Zapret' : kind === 'app' ? 'Zapret Launcher' : kind} ${version}`));
+    note.on('failed', (_event, error) => console.warn(`[notify] Update notification failed: ${kind}`, error || 'unknown'));
+    note.on('click', () => { if (htmlUrl) shell.openExternal(htmlUrl).catch?.(() => {}); });
+    note.show();
+    saveConfig({ updateNotificationVersions: { ...seen, [kind]: version } });
+    return true;
+  } catch (e) {
+    console.warn(`[notify] Update notification failed: ${kind}`, e?.message || e);
+    return false;
+  }
+}
+
+async function checkReleaseNotifications() {
+  if (process.platform !== 'win32') return;
+  const cfg = getConfig();
+  if (cfg.releaseNotifications === false) return;
+  const tasks = [];
+  if (cfg.appAutoCheckUpdates !== false) tasks.push((async () => {
+    const latest = await updater.fetchLatestRelease(cfg.appRepo);
+    if (updater.isNewer(latest.version, app.getVersion())) {
+      const info = { hasUpdate: true, local: app.getVersion(), remote: latest.version, htmlUrl: latest.htmlUrl, notes: latest.body || '', portable: !!process.env.PORTABLE_EXECUTABLE_DIR };
+      send('evt:app-update', info);
+      notifyRelease('app', 'Доступна новая версия Zapret Launcher', latest.version, latest.htmlUrl);
+    }
+  })());
+  if (cfg.autoCheckUpdates !== false && cfg.batsDir) tasks.push((async () => {
+    const local = updater.getLocalVersion(cfg.batsDir);
+    if (!local) return;
+    const info = await updater.checkUpdate(cfg.repo, cfg.batsDir);
+    send('evt:update', info);
+    if (info.hasUpdate && info.remote) notifyRelease('zapret', 'Доступна новая версия Zapret', info.remote, info.htmlUrl);
+  })());
+  if (cfg.tgAutoCheckUpdates !== false) tasks.push((async () => {
+    const manager = getTgManager();
+    if (!manager.status().installed) return;
+    const info = await manager.checkUpdate();
+    send('evt:tg-update', info);
+    if (info.hasUpdate && info.remote) notifyRelease('tg', 'Доступна новая версия TG Proxy', info.remote, info.htmlUrl);
+  })());
+  await Promise.allSettled(tasks);
 }
 
 export function notifyState() {
@@ -75,11 +135,34 @@ export function registerIpc() {
 
 
   // ---------- proxy / VPN center ----------
+  let previousProxyRunning = false;
   proxy.onState((state) => {
     try {
       const cfg = proxy.getSettings();
-      saveConfig({ proxyEnabled: !!state.running, proxyMode: cfg.mode || 'proxy', proxySystem: !!cfg.systemProxy, proxySocksPort: cfg.socksPort, proxyHttpPort: cfg.httpPort, proxyRoute: cfg.routeProfile });
+      saveConfig({ proxyEnabled: !!state.running, proxyMode: cfg.mode || 'mixed', proxySystem: !!cfg.systemProxy, proxySocksPort: cfg.socksPort, proxyHttpPort: cfg.httpPort, proxyRoute: cfg.routeProfile });
     } catch {}
+    if (!previousProxyRunning && state?.running && process.platform === 'win32') {
+      try {
+        const selected = state.selected?.name || 'VPN-сервер';
+        const supported = typeof Notification?.isSupported === 'function' ? Notification.isSupported() : true;
+        if (supported) {
+          const iconFile = path.join(appRoot(), 'src', 'assets', 'icon.ico');
+          const options = {
+            title: 'Zapret Launcher',
+            body: `VPN подключён: ${selected}`,
+            silent: false
+          };
+          if (fs.existsSync(iconFile)) options.icon = iconFile;
+          const note = new Notification(options);
+          note.on('show', () => console.log('[notify] Windows VPN connection notification shown'));
+          note.on('failed', (_event, error) => console.warn('[notify] Windows VPN connection notification failed:', error || 'unknown'));
+          note.show();
+        } else {
+          console.warn('[notify] Windows notifications are not supported on this system');
+        }
+      } catch (e) { console.warn('[notify] VPN connection notification failed:', e?.message || e); }
+    }
+    previousProxyRunning = !!state?.running;
     notifyProxy();
   });
   ipcMain.handle('proxy:status', () => proxy.status());
@@ -101,6 +184,7 @@ export function registerIpc() {
   ipcMain.handle('proxy:pingAll', () => proxy.pingAll());
   ipcMain.handle('proxy:pingSubscription', (_e, id) => proxy.pingSubscription(id));
   ipcMain.handle('proxy:start', (_e, opts) => proxy.start(opts || {}));
+  ipcMain.handle('proxy:prewarm', () => proxy.prewarm());
   ipcMain.handle('proxy:stop', () => proxy.stop());
   ipcMain.handle('proxy:subscriptions', () => proxy.getSubscriptions());
   ipcMain.handle('proxy:addSubscription', (_e, { url, name }) => proxy.addSubscription(url, name || ''));
@@ -232,6 +316,7 @@ export function registerIpc() {
     const info = await updater.checkUpdate(cfg.repo, cfg.batsDir);
     updateState.info = info;
     send('evt:update', info);
+    if (info?.hasUpdate) notifyRelease('zapret', 'Доступна новая версия Zapret', info.remote, info.htmlUrl);
     return info;
   });
 
@@ -279,6 +364,7 @@ export function registerIpc() {
       };
       appUpdateState.info = info;
       send('evt:app-update', info);
+      if (info.hasUpdate) notifyRelease('app', 'Доступна новая версия Zapret Launcher', info.remote, info.htmlUrl);
       return info;
     } catch (err) {
       return { hasUpdate: false, local: app.getVersion(), remote: null, error: String(err?.message ?? err) };
@@ -333,7 +419,11 @@ export function registerIpc() {
   ipcMain.handle('tg:toggle', () => getTgManager().toggle());
   ipcMain.handle('tg:start', () => getTgManager().start());
   ipcMain.handle('tg:stop', () => getTgManager().stop());
-  ipcMain.handle('tg:check', () => getTgManager().checkUpdate().then((info) => { send('evt:tg-update', info); return info; }));
+  ipcMain.handle('tg:check', () => getTgManager().checkUpdate().then((info) => {
+    send('evt:tg-update', info);
+    if (info?.hasUpdate) notifyRelease('tg', 'Доступна новая версия TG Proxy', info.remote, info.htmlUrl);
+    return info;
+  }));
   ipcMain.handle('tg:install', () => getTgManager().installLatest((p) => send('evt:tg-progress', p)));
   ipcMain.handle('tg:getConfig', () => getTgManager().getConfig());
   ipcMain.handle('tg:setConfig', (_e, patch) => getTgManager().setConfig(patch));
@@ -378,7 +468,7 @@ export function registerIpc() {
   ipcMain.handle('sys:info', async () => ({
     elevated: await isAdmin(),
     version: app.getVersion(),
-    build: 'm1.4.6',
+    build: 'm1.5.6',
     platform: process.platform
   }));
 }
@@ -391,12 +481,18 @@ export function initAfterReady() {
 export async function initProxyAfterReady() {
   try {
     const ps = proxy.getSettings();
+    // A previous unclean exit may leave the Launcher's own local proxy enabled.
+    // Clear only our known 127.0.0.1 endpoints so the startup prewarm cannot receive
+    // normal Windows traffic and cannot appear as an automatic VPN connection.
+    await proxy.clearStaleLauncherSystemProxy().catch(() => {});
     saveConfig({ proxyMode: ps.mode, proxySystem: ps.systemProxy, proxySocksPort: ps.socksPort, proxyHttpPort: ps.httpPort, proxyRoute: ps.routeProfile });
     notifyProxy();
     if (proxyRefreshTimer) clearInterval(proxyRefreshTimer);
     if (ps.subscriptionAutoUpdate !== false) {
       const hours = Math.max(1, Number(ps.subscriptionUpdateIntervalHours || ps.subscriptionIntervalHours || 6));
       proxyRefreshTimer = setInterval(() => proxy.refreshAllSubscriptions().catch(() => {}), hours * 3600 * 1000);
+      // Обновляем подписки в фоне, но VPN-ядро при старте приложения НЕ запускаем.
+      // Прогрев выполняется после открытия вкладки VPN, а подключение — только по клику.
       proxy.refreshAllSubscriptions().catch(() => {});
     }
     if (ps.subscriptionPingOnOpen && proxy.getServers().length) proxy.pingAll().catch(() => {});
@@ -410,4 +506,12 @@ export async function initProxyAfterReady() {
       if(target){ proxy.selectServer(target.id); await proxy.start({mode:ps.mode}); }
     }
   } catch (e) { console.warn('[proxy-init]', e?.message || e); }
+}
+
+
+export function initReleaseNotifications() {
+  const run = () => checkReleaseNotifications().catch((e) => console.warn('[release-notify]', e?.message || e));
+  setTimeout(run, 5000);
+  const timer = setInterval(run, 6 * 60 * 60 * 1000);
+  timer.unref?.();
 }

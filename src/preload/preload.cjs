@@ -5,7 +5,7 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('api', {
   // маркер сборки preload-слоя (для самодиагностики «старых файлов»)
-  build: 'p1.4.9',
+  build: 'p1.5.5',
 
   // окно
   minimize: () => ipcRenderer.send('win:minimize'),
@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld('api', {
   proxyPingAll: () => invoke('proxy:pingAll'),
   proxyPingSubscription: (id) => invoke('proxy:pingSubscription', id),
   proxyStart: (opts) => invoke('proxy:start', opts),
+  proxyPrewarm: () => invoke('proxy:prewarm'),
   proxyStop: () => invoke('proxy:stop'),
   proxySubscriptions: () => invoke('proxy:subscriptions'),
   proxyAddSubscription: (url, name) => invoke('proxy:addSubscription', { url, name }),

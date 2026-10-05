@@ -9,7 +9,7 @@ import { sh } from './util.js';
 const API = (repo) => `https://api.github.com/repos/${repo}/releases/latest`;
 const RAW_VERSION = (repo) => `https://raw.githubusercontent.com/${repo}/main/.service/version.txt`;
 
-const USER_AGENT = 'Zapret-Launcher/1.3.5';
+const USER_AGENT = 'Zapret-Launcher/1.5.6';
 const MAX_REDIRECTS = 6;
 const HTTPS_TIMEOUT = 30000;
 
